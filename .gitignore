@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.env
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+
+# Build artifacts
+*.zip
+
+# OS
+Thumbs.db
+desktop.ini
