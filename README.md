@@ -110,6 +110,18 @@ become available. `app` holds everything else and is applied live during the rev
 `app` reads `base` outputs through `terraform_remote_state`.
 *Trade-off:* two state files instead of one, and a dependency between them.
 
+**`infra/app` finds `infra/base` through its state file, not by looking resources up by tag.**
+`terraform_remote_state` reads the outputs of `base`'s local state file: the VPC, the subnets, the
+database endpoint, the secret's ARN, the topic. The alternative is a data source per resource in `app`,
+each finding its target by tag. That removes the dependency on the file, but it is more code, and it is
+a second source of truth: the tags `app` searches for must stay in step with what `base` creates, and a
+mismatch shows up as a lookup that finds nothing, or the wrong thing. The outputs are one explicit
+contract instead.
+*Trade-off:* `app` can only be planned on the machine that holds `base`'s state file, at the path it
+expects, which suits a single operator and nothing larger. It also fixes the order: `base` is applied
+before `app` and destroyed after it. With a team, both states would live in an S3 backend and
+`terraform_remote_state` would read from there, with no other change.
+
 **EC2 instances in private subnets, egress through a NAT Gateway.**
 The instances have no public IP. Inbound traffic reaches them only from the load balancer's security
 group; everything else is denied at the subnet level, not just by a security group rule.
@@ -117,6 +129,16 @@ group; everything else is denied at the subnet level, not just by a security gro
 per AZ: if that AZ fails, the instance in the other AZ still serves traffic through the ALB but cannot
 reach S3, Secrets Manager or CloudWatch, and a replacement instance cannot boot. In production this
 would be one NAT per AZ.
+
+**A NAT Gateway rather than VPC endpoints.**
+In production the instances would reach AWS services through VPC endpoints instead: interface endpoints
+for Session Manager, Secrets Manager, CloudWatch Logs and CloudWatch metrics, and a gateway endpoint for
+S3. That traffic would then never leave the AWS network, and the instances would need no route to the
+internet at all, which is the more secure pattern.
+*Trade-off:* interface endpoints are billed per endpoint, per availability zone, per hour, and the
+handful this project needs, in two zones, costs more than the single NAT. They would also not remove the
+NAT: the instances install their Python dependencies from PyPI at boot, which no endpoint reaches. For a
+four-day project the NAT is the cheaper way to the same working system.
 
 **Auto Scaling Group with min = max = desired = 2, one instance per AZ, `health_check_type = "ELB"`.**
 This gives self-healing with no code: a failing instance is replaced automatically, which can be
