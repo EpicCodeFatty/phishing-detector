@@ -1,0 +1,18 @@
+Return-Path: <accounts@fabrikam.com>
+Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=fabrikam.com; dkim=none; dmarc=none
+From: "Fabrikam Accounts" <accounts@fabrikam.com>
+Reply-To: fabrikam.accounts@mailbox-online.net
+To: payables@example.org
+Subject: Updated bank details
+Date: Tue, 10 Nov 2026 14:05:18 +0000
+Message-ID: <upd-3391@fabrikam.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+Hello,
+
+Our bank has changed. Please use the new account details for this month's
+wire transfer and confirm by reply once it has been sent.
+
+Kind regards,
+Fabrikam Accounts

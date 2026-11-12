@@ -1,0 +1,19 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Recent ruff versions also reformat Python code blocks inside Markdown. The
+# snippets in docs/ are specification text, laid out by hand, so they are left alone.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+# E/F: pycodestyle and pyflakes, the baseline
+# I:   import order
+# B:   bugbear, catches real bugs like mutable default arguments
+# UP:  modern syntax for the target Python version
+# SIM: simplifications that reduce nesting
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The repository root goes on sys.path so the tests can import app.detector and detect.
+pythonpath = ["."]

@@ -48,10 +48,10 @@ Runtime (`app/requirements.txt`, pinned):
   domain there is `evil.co.uk`, not `paypal.com`.
 - `beautifulsoup4` — extracts anchors from the HTML part of an email.
 
-Development only: `pytest`.
+Development only (`requirements-dev.txt`, pinned): `pytest` and `ruff`.
 
 Everything else comes from the standard library: `email`, `re`, `ipaddress`, `urllib.parse`,
-`difflib`, `zipfile`, `hashlib`.
+`zipfile`, `hashlib`.
 
 ### Important: tldextract must not download anything at runtime
 
@@ -176,11 +176,13 @@ module means the engine's judgement can be reviewed without reading any logic.
 
 ```python
 # Registrable domains of brands commonly impersonated in phishing.
+# gmail.com is deliberately absent: genuine Gmail mail is far too common for the
+# name to count as a sign of impersonation, and Google is covered by google.com.
 BRANDS = [
     "paypal.com", "microsoft.com", "office365.com", "apple.com", "amazon.com",
-    "google.com", "gmail.com", "netflix.com", "facebook.com", "instagram.com",
-    "linkedin.com", "dropbox.com", "adobe.com", "docusign.com", "fedex.com",
-    "dhl.com", "ups.com", "chase.com", "wellsfargo.com", "bankofamerica.com",
+    "google.com", "netflix.com", "facebook.com", "instagram.com", "linkedin.com",
+    "dropbox.com", "adobe.com", "docusign.com", "fedex.com", "dhl.com",
+    "ups.com", "chase.com", "wellsfargo.com", "bankofamerica.com",
 ]
 
 # Domains that genuinely belong to the brands above. Without this list, legitimate
@@ -189,6 +191,15 @@ BRAND_OWNED = [
     "paypalobjects.com", "microsoftonline.com", "office.com", "outlook.com",
     "googlemail.com", "googleusercontent.com", "amazonses.com", "amazonaws.com",
     "icloud.com", "fb.com",
+]
+
+# Real, unrelated domains that happen to resemble a brand. Checked before any brand
+# comparison, so the resemblance can never be held against them. The list handles
+# the common collisions and is not exhaustive: an ordinary word a letter or two away
+# from a brand cannot be told from a typo-squat by spelling alone.
+KNOWN_LEGITIMATE = [
+    "usps.com", "mail.com", "groups.io", "chess.com", "phase.com", "ripple.com",
+    "maple.com", "apply.com", "amazing.com", "index.com", "abode.com",
 ]
 
 SHORTENERS = ["bit.ly", "tinyurl.com", "goo.gl", "t.co", "ow.ly", "is.gd",
@@ -221,11 +232,31 @@ WORDING = {
 # Character substitutions used to make a domain look like a brand.
 SUBSTITUTIONS = {"0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t"}
 
+# Letter pairs that read as a single different letter at a glance: rnicrosoft.com.
+DIGRAPH_SUBSTITUTIONS = {"rn": "m"}
+
+# Brand names shorter than this ("ups", "dhl") turn up inside ordinary words and sit
+# within two edits of many real names, so they are matched by exact substitution only.
+MIN_LOOSE_MATCH_NAME_LENGTH = 5
+
+# A domain within this many single-character edits of a brand's domain, and within
+# this difference in length, counts as a deliberate near-spelling: payppal.com.
+MAX_LOOKALIKE_EDIT_DISTANCE = 2
+MAX_LOOKALIKE_LENGTH_DIFFERENCE = 2
+
+# Characters that separate the tokens of a domain: paypal-secure.com is paypal, secure, com.
+DOMAIN_TOKEN_DELIMITERS = "-._"
+
 # File signatures, mapped to the extensions they are consistent with.
 MAGIC = {
     b"MZ":               ["exe", "dll", "scr", "com"],
     b"%PDF":             ["pdf"],
-    b"PK\x03\x04":       ["zip", "docx", "xlsx", "pptx", "docm", "xlsm", "pptm", "jar", "odt"],
+    # ZIP containers: plain archives, every Office Open XML format, and OpenDocument.
+    b"PK\x03\x04":       ["zip", "jar",
+                          "docx", "docm", "dotx", "dotm",
+                          "xlsx", "xlsm", "xltx", "xltm", "xlsb", "xlam",
+                          "pptx", "pptm", "potx", "potm", "ppsx", "ppsm", "ppam", "sldx", "sldm",
+                          "odt", "ods", "odp"],
     b"\xd0\xcf\x11\xe0": ["doc", "xls", "ppt", "msi"],
     b"\x89PNG":          ["png"],
     b"\xff\xd8\xff":     ["jpg", "jpeg"],
@@ -274,8 +305,9 @@ Operates on the headers. Produces nothing when `has_headers` is `False`.
 
 | code | severity | condition |
 |---|---|---|
-| `lookalike_domain` | critical | the sender's registrable domain imitates a brand by character substitution or by a one-or-two character difference |
-| `brand_in_domain` | high | the sender's registrable domain contains a brand name but is not that brand and is not in `BRAND_OWNED` |
+| `lookalike_domain` | critical | the sender's registrable domain spells a brand name by character substitution: `paypa1.com` |
+| `lookalike_domain_fuzzy` | high | the sender's registrable domain is within two edits of a brand's domain: `payppal.com` |
+| `brand_in_domain` | high | the sender's registrable domain contains a brand name as a whole token, but is not that brand and is not in `BRAND_OWNED` |
 | `display_name_spoof` | high | the display name contains a brand name while the sender domain is not that brand's |
 | `dmarc_fail` | high | `Authentication-Results` contains `dmarc=fail` |
 | `non_ascii_domain` | high | the sender domain contains non-ASCII characters or starts with `xn--` |
@@ -284,46 +316,121 @@ Operates on the headers. Produces nothing when `has_headers` is `False`.
 | `dkim_fail` | medium | `Authentication-Results` contains `dkim=fail` |
 
 The domain classifier is the most important piece of logic in the engine. It must distinguish three
-cases, because they carry different weight:
+kinds of resemblance, because they are evidence of very different reliability:
 
 ```python
-from difflib import SequenceMatcher
-
 def classify_domain(domain: str, brands: list[str], brand_owned: list[str]):
     """Return (code, severity, brand) or None.
 
-    - exact brand, or a known brand-owned domain -> None
-    - imitation by substitution or near-spelling  -> lookalike_domain, critical
-    - brand name inside an unrelated domain       -> brand_in_domain, high
+    - known-legitimate, exact brand, or brand-owned domain -> None
+    - imitation by character substitution                   -> lookalike_domain, critical
+    - within two edits of a brand's domain                  -> lookalike_domain_fuzzy, high
+    - brand name as a whole token of an unrelated domain    -> brand_in_domain, high
     """
     d = domain.lower()
-    if d in brands or d in brand_owned:
+    if d in KNOWN_LEGITIMATE or d in brands or d in brand_owned:
         return None
 
-    normalized = d.replace("rn", "m")
-    for src, dst in SUBSTITUTIONS.items():
-        normalized = normalized.replace(src, dst)
+    normalized = undo_substitutions(d)      # "rn" -> "m", then SUBSTITUTIONS
+
+    # paypa1.com normalizes to paypal.com: substitution, no innocent explanation.
+    # Every brand is tried for it first, so that a weaker match against one brand
+    # can never hide the conclusive match against another.
+    for brand in brands:
+        if is_spelled_by_substitution(brand.split(".")[0], d, normalized):
+            return ("lookalike_domain", "critical", brand)
 
     for brand in brands:
         name = brand.split(".")[0]          # "paypal"
-        # paypa1.com normalizes to paypal.com: substitution, no innocent explanation
-        if normalized != d and name in normalized:
-            return ("lookalike_domain", "critical", brand)
-        # payppal.com: a typo-squat, close enough that it is deliberate
-        if SequenceMatcher(None, normalized, brand).ratio() >= 0.85:
-            return ("lookalike_domain", "critical", brand)
+        # "ups" and "dhl" are too short for anything looser than substitution
+        if len(name) < MIN_LOOSE_MATCH_NAME_LENGTH:
+            continue
+        # payppal.com: probably a typo-squat, but chess.com is as close to chase.com
+        if is_near_spelling(normalized, brand):
+            return ("lookalike_domain_fuzzy", "high", brand)
         # paypal-secure.com: suspicious, but brands do own domains like this
-        if name in d:
+        if name in domain_tokens(d):
             return ("brand_in_domain", "high", brand)
     return None
+
+
+def is_spelled_by_substitution(name, d, normalized):
+    # The name has to be absent before the look-alike characters are undone and
+    # present after. paypal-24.com does not qualify: its digits are not standing in
+    # for letters of the name.
+    if len(name) >= MIN_LOOSE_MATCH_NAME_LENGTH:
+        return name in normalized and name not in d
+    # A short name must also come out as a whole token: up5.com spells ups, while
+    # group5.com merely contains those letters once the 5 is undone.
+    return name in domain_tokens(normalized) and name not in domain_tokens(d)
+
+
+def is_near_spelling(normalized, brand):
+    return (abs(len(normalized) - len(brand)) <= MAX_LOOKALIKE_LENGTH_DIFFERENCE
+            and edit_distance(normalized, brand) <= MAX_LOOKALIKE_EDIT_DISTANCE)
+
+
+def domain_tokens(domain):
+    return re.split(r"[-._]", domain)       # DOMAIN_TOKEN_DELIMITERS
 ```
 
-Rationale for the split: `paypa1` has no innocent explanation, because nobody registers a digit-for-letter
-variant of someone else's brand by accident. `paypal-secure.com` is suspicious but the shape is one that
-real companies use, which is why it is high rather than critical and why `BRAND_OWNED` exists.
+`edit_distance` is a plain Levenshtein distance — the fewest single-character insertions, deletions
+and replacements that turn one string into the other — implemented in `sender.py`. It needs no
+dependency, and unlike a similarity ratio its result means the same thing for a short string as for a
+long one.
 
-Note the ordering: check substitution before plain containment, or `paypa1-secure.com` is reported as
-the weaker `brand_in_domain`.
+Rationale for the split. The three codes are separate because the evidence behind them is not equally
+strong, and the severity of each follows from how often it has an innocent explanation:
+
+- **Substitution is conclusive, so it is critical.** `paypa1` has no innocent explanation, because
+  nobody registers a digit-for-letter variant of someone else's brand by accident. The substitution
+  has to be what spells the name: in `paypal-24.com` the digits stand in for nothing, so that domain
+  falls through to `brand_in_domain`.
+- **A near-spelling is only probable, so it is high.** `payppal.com` is almost certainly a typo-squat,
+  but spelling alone cannot tell it from an ordinary word that happens to sit one or two letters away
+  from a brand. On its own it yields Suspicious; it takes a second finding to reach Phishing.
+- **Containment is suspicious but common, so it is high.** `paypal-secure.com` has a shape that real
+  companies use, which is also why `BRAND_OWNED` exists.
+
+Note the ordering: substitution is tested against every brand before any weaker rule runs, or
+`paypa1-secure.com` would be reported as the weaker `brand_in_domain`.
+
+The rules are deliberately narrow, because an earlier version that compared domains with a similarity
+ratio and matched brand names as bare substrings condemned real domains:
+
+- **Near-spelling compares whole domains by edit distance.** The normalized sender domain must be
+  within two edits of the brand's domain, and within two characters of its length. A ratio rewarded the
+  shared `.com`: it scored `usps.com` against `ups.com` at 0.93 and `mail.com` against `gmail.com` at
+  0.94.
+- **Short brand names are matched by exact substitution only.** A name under five characters (`ups`,
+  `dhl`) is skipped by both the near-spelling and the containment rule, and counts as a substitution
+  only when undoing the look-alike characters produces it as a whole token: `up5.com` and
+  `dh1-express.com` match, `group5.com` does not.
+- **Containment means a whole token.** The brand name must stand between `-`, `.`, `_` or the ends of
+  the domain. `paypal-secure.com` matches; `pineapple.com` and `groups.io` do not.
+- **`KNOWN_LEGITIMATE` is checked first.** A real domain that still trips a rule is added to that
+  list, which clears it before any brand comparison is made. The list applies to this classifier only:
+  a brand's name in the display name of a `mail.com` sender is still `display_name_spoof`.
+- **`gmail.com` is not a brand.** Genuine Gmail mail is far too common for the name to signal
+  impersonation, and impersonation of Google is covered by `google.com`.
+
+Known limitation: edit distance trades precision for recall, and no threshold removes the trade.
+Distance measures how many characters differ, not whether the result could be mistaken for the brand,
+so a typo-squat and an unrelated word look the same to it: `goggle.com`, a well-known typo-squat of
+`google.com`, and `apply.com` are each one edit from a brand, `micosoft.com` and `chess.com` each
+within two.
+
+- Lowering the threshold to one edit does not restore precision — `apply.com` and `phase.com` are
+  both one edit from a brand — and it costs recall, because two-edit squats stop matching.
+- Raising it catches more squats and condemns more ordinary words.
+
+The threshold therefore stays at two, which keeps recall, and the cost in precision is bounded in two
+other places. The severity is high rather than critical, so a false match makes a legitimate email
+Suspicious, never Phishing by itself. And `KNOWN_LEGITIMATE` clears the common collisions outright.
+That list is a patch for the frequent cases, not a solution: an unlisted real domain that is close to a
+brand will still be flagged. It holds only domains that are unrelated to the brand they resemble;
+`goggle.com` is deliberately not on it, because it is exactly what the rule exists to flag. The principled fix is to weigh *which* characters differ, counting an edit
+only when the two characters are visually confusable; see "What I would do differently" in the README.
 
 ### 6.3 Wording (`checks/wording.py`)
 
@@ -343,7 +450,7 @@ Wording alone must never reach a verdict above Safe. This is enforced in scoring
 | code | severity | condition |
 |---|---|---|
 | `dangerous_ext` | critical | the final extension is in `DANGEROUS_EXT` |
-| `type_mismatch` | critical | the file's magic bytes identify a type inconsistent with its extension |
+| `type_mismatch` | critical | the file's magic bytes identify one type while its extension belongs to a different known type |
 | `double_ext` | high | the filename has two or more extensions and the last one is dangerous, e.g. `invoice.pdf.exe` |
 | `macro_ext` | high | the extension is in `MACRO_EXT` |
 | `macro_inside` | high | the file is a ZIP container (Office format) holding `vbaProject.bin` |
@@ -352,9 +459,12 @@ Implementation notes:
 
 - Normalise the filename first: strip whitespace, strip right-to-left override characters (`‮`),
   lowercase it. The RLO trick renders `invoice‮gpj.exe` as `invoice exe.jpg` to the reader.
-- For `type_mismatch`, look up the longest matching prefix in `MAGIC`. If the extension is absent from
-  that signature's list, report it. If the signature is unknown, report nothing: an unrecognised file
-  type is not evidence of anything.
+- For `type_mismatch`, look up the longest matching prefix in `MAGIC`. Report a mismatch only when the
+  extension is absent from that signature's list *and* present in some other signature's list:
+  `scan.pdf` starting with `MZ` claims to be one known type while being another. If the extension
+  appears in no list at all, report nothing. `MAGIC` cannot enumerate every format built on a common
+  container — `.epub` is a ZIP archive too — so an unrecognised extension is not evidence of anything.
+  The same holds for an unknown signature and for a file with no extension.
 - For `macro_inside`, open the payload with `zipfile.ZipFile(io.BytesIO(payload))` and look for an entry
   named `vbaProject.bin`. Wrap it in `try/except zipfile.BadZipFile`. Do not extract anything.
 - Never write an attachment to disk and never execute one. The engine only reads bytes in memory.
@@ -473,7 +583,11 @@ Required coverage:
    the code and the severity.
 2. **Per check, the negative case.** The legitimate equivalent produces nothing. In particular:
    `paypal.com` and `paypalobjects.com` produce no sender finding, and an anchor whose text and href
-   agree produces no link finding.
+   agree produces no link finding. Every domain in `KNOWN_LEGITIMATE` (`usps.com`, `chess.com`,
+   `apply.com` and the rest) produces no sender finding, and a `.dotm` or `.epub` attachment holding a
+   ZIP archive produces no `type_mismatch`. The two lookalike codes stay apart: `paypa1.com` produces
+   `lookalike_domain` at critical, while a near-spelling that is not on the allowlist, such as
+   `payppal.com`, produces `lookalike_domain_fuzzy` at high.
 3. **Scoring rules**, as a table-driven test:
 
    | findings | expected verdict | expected `decided_by` |

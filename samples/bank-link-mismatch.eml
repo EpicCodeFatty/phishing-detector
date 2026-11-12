@@ -1,0 +1,19 @@
+Return-Path: <alerts@secure-notices.net>
+Authentication-Results: mx.example.org; spf=pass; dkim=pass; dmarc=pass
+From: "Customer Service" <alerts@secure-notices.net>
+To: omar@example.org
+Subject: A new statement is ready
+Date: Tue, 10 Nov 2026 11:02:47 +0000
+Message-ID: <77c2d9@secure-notices.net>
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+
+<html>
+<body>
+<p>Hello,</p>
+<p>Your November statement is ready to view.</p>
+<p>Sign in at <a href="https://statements.secure-notices.net/chase/login">www.chase.com</a>
+to read it.</p>
+<p>Thank you for banking with us.</p>
+</body>
+</html>

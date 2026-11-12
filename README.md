@@ -26,7 +26,36 @@ TODO — parsing, the four checkers (links, sender, wording, attachments), and h
 
 ### Locally
 
-TODO
+The detection engine runs on its own, with no AWS account and no network access. It needs Python 3.12.
+
+```bash
+py -3.12 -m venv .venv                  # python3.12 -m venv .venv on Linux and macOS
+.venv\Scripts\activate                  # source .venv/bin/activate on Linux and macOS
+pip install -r requirements-dev.txt
+```
+
+`requirements-dev.txt` pins the development tools, `pytest` and `ruff`, and pulls in the runtime
+dependencies from `app/requirements.txt`, so that one command sets up everything.
+
+Analyse an email file:
+
+```bash
+python detect.py samples/paypal-phish.eml           # human-readable report
+python detect.py samples/paypal-phish.eml --json    # the same result as JSON
+```
+
+The exit code carries the verdict: `0` Safe, `1` Suspicious, `2` Phishing, `3` if the file could not
+be read.
+
+Before every commit:
+
+```bash
+ruff format .
+ruff check .
+pytest
+```
+
+TODO — running the web application locally.
 
 ### On AWS
 
@@ -177,4 +206,20 @@ created manually, outside Terraform, so that it survives `terraform destroy`.
 
 ## 10. What I would do differently with more time
 
-TODO — written at the end, once the system is running.
+**Match lookalike domains on visual confusability, not on edit distance.**
+The engine flags a sender domain within two edits of a brand's domain. Edit distance counts how many
+characters differ, but not whether the result could be mistaken for the brand, so it cannot tell
+`payppal.com` from `apply.com`: both are one edit away from a brand. Tightening the threshold does not
+help, since real typo-squats and ordinary words sit at the same distances. Today the damage is
+contained rather than fixed: a near-spelling is only a high-severity finding, so on its own it yields
+Suspicious and not Phishing, and an allowlist clears the common collisions.
+The principled fix is a Unicode confusables mapping, such as the one published with Unicode Technical
+Standard #39. An edit would count as suspicious only when the characters involved are visually
+confusable: `rn` for `m`, `1` for `l`, a Cyrillic `а` (U+0430) for a Latin `a`. Swapping `g` for `o` would count
+for nothing, and neither would the letters that separate `chess.com` from `chase.com`. That replaces a
+measure of spelling with a measure of what a reader would actually misread, and it would make the
+allowlist unnecessary.
+*Trade-off:* confusability covers imitation that works on the eye, not squats that rely on a typing
+slip. `goggle.com` is one of those, and it would need its own signal, such as keyboard adjacency.
+
+TODO — the rest is written at the end, once the system is running.

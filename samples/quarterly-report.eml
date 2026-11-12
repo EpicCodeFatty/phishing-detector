@@ -1,0 +1,30 @@
+Return-Path: <eitan.levi@contoso.com>
+Authentication-Results: mx.contoso.com; spf=pass; dkim=pass; dmarc=pass
+From: "Eitan Levi" <eitan.levi@contoso.com>
+To: board@contoso.com
+Subject: Q3 report
+Date: Tue, 10 Nov 2026 16:48:22 +0000
+Message-ID: <q3-report@contoso.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="=_mixed_q3"
+
+--=_mixed_q3
+Content-Type: text/plain; charset="utf-8"
+
+Hi,
+
+The Q3 report is attached ahead of next week's meeting. Comments are welcome
+by Friday.
+
+Eitan
+
+--=_mixed_q3
+Content-Type: application/pdf; name="q3-report.pdf"
+Content-Disposition: attachment; filename="q3-report.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2Jq
+CjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFtdIC9Db3VudCAwID4+CmVuZG9iagp0cmFp
+bGVyCjw8IC9Sb290IDEgMCBSID4+CiUlRU9GCg==
+
+--=_mixed_q3--

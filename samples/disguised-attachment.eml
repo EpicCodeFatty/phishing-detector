@@ -1,0 +1,28 @@
+Return-Path: <scanner@riverbank-dental.com>
+Authentication-Results: mx.example.org; spf=pass; dkim=pass; dmarc=pass
+From: "Office Scanner" <scanner@riverbank-dental.com>
+To: reception@example.org
+Subject: Scanned document 0042
+Date: Wed, 11 Nov 2026 13:27:05 +0000
+Message-ID: <scan0042@riverbank-dental.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="=_mixed_scan0042"
+
+--=_mixed_scan0042
+Content-Type: text/plain; charset="utf-8"
+
+A document was scanned and sent to you from the office scanner.
+
+Pages: 2
+Format: PDF
+
+--=_mixed_scan0042
+Content-Type: application/pdf; name="scan_0042.pdf"
+Content-Disposition: attachment; filename="scan_0042.pdf"
+Content-Transfer-Encoding: base64
+
+TVqQAEluZXJ0IHRlc3QgZml4dHVyZSBmb3IgdGhlIHBoaXNoaW5nIGRldGVjdG9yLiBOb3QgYSBw
+cm9ncmFtLgpJbmVydCB0ZXN0IGZpeHR1cmUgZm9yIHRoZSBwaGlzaGluZyBkZXRlY3Rvci4gTm90
+IGEgcHJvZ3JhbS4K
+
+--=_mixed_scan0042--

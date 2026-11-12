@@ -1,0 +1,7 @@
+# Development and test dependencies. Installs the runtime dependencies too,
+# so one command sets up a working environment:
+#
+#     pip install -r requirements-dev.txt
+-r app/requirements.txt
+pytest==9.2.0
+ruff==0.17.5

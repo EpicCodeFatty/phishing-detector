@@ -1,0 +1,8 @@
+Notes from the planning meeting, 10 November
+
+- The release moves to the first week of December.
+- Tal will draft the migration checklist and share it on Friday.
+- The staging environment is rebuilt every night; details are on the wiki:
+  https://wiki.contoso.com/platform/staging
+
+Next meeting: 17 November, 10:00.

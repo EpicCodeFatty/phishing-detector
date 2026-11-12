@@ -1,0 +1,35 @@
+Return-Path: <bounce@paypal.com>
+Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=paypal.com;
+ dkim=pass header.d=paypal.com; dmarc=pass header.from=paypal.com
+From: "PayPal" <service@paypal.com>
+To: customer@example.org
+Subject: Receipt for your payment to Northwind Traders
+Date: Wed, 11 Nov 2026 18:44:31 +0000
+Message-ID: <rcpt-9A31F7@paypal.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="=_alt_rcpt"
+
+--=_alt_rcpt
+Content-Type: text/plain; charset="utf-8"
+
+You sent a payment of $42.00 USD to Northwind Traders.
+
+Transaction ID: 9A31F7XK2204
+Date: 11 November 2026
+
+View the details at https://www.paypal.com/myaccount/transactions
+
+--=_alt_rcpt
+Content-Type: text/html; charset="utf-8"
+
+<html>
+<body>
+<img src="https://www.paypalobjects.com/images/logo.png" alt="PayPal">
+<p>You sent a payment of $42.00 USD to Northwind Traders.</p>
+<p>Transaction ID: 9A31F7XK2204<br>Date: 11 November 2026</p>
+<p>View the details at
+<a href="https://www.paypal.com/myaccount/transactions">www.paypal.com</a>.</p>
+</body>
+</html>
+
+--=_alt_rcpt--

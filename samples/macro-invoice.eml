@@ -1,0 +1,37 @@
+Return-Path: <accounts@brightpath-logistics.com>
+Authentication-Results: mx.example.org; spf=pass; dkim=pass; dmarc=pass
+From: "Brightpath Accounts" <accounts@brightpath-logistics.com>
+To: finance@example.org
+Subject: Invoice 4471
+Date: Wed, 11 Nov 2026 09:15:33 +0000
+Message-ID: <inv4471@brightpath-logistics.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="=_mixed_inv4471"
+
+--=_mixed_inv4471
+Content-Type: text/plain; charset="utf-8"
+
+Hello,
+
+Please find the invoice attached for October's deliveries. Open the document
+and choose "Enable Content" to see the full breakdown.
+
+Regards,
+Brightpath Accounts
+
+--=_mixed_inv4471
+Content-Type: application/vnd.ms-word.document.macroEnabled.12; name="Invoice_4471.docm"
+Content-Disposition: attachment; filename="Invoice_4471.docm"
+Content-Transfer-Encoding: base64
+
+UEsDBBQAAAAAAABIaV3uR1hmHQAAAB0AAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbDw/eG1sIHZl
+cnNpb249IjEuMCI/PjxUeXBlcy8+UEsDBBQAAAAAAABIaV30/mHEIAAAACAAAAARAAAAd29yZC9k
+b2N1bWVudC54bWw8P3htbCB2ZXJzaW9uPSIxLjAiPz48ZG9jdW1lbnQvPlBLAwQUAAAAAAAASGld
+OOMufycAAAAnAAAAEwAAAHdvcmQvdmJhUHJvamVjdC5iaW5JbmVydCB0ZXN0IGZpeHR1cmUuIE5v
+dCBhIFZCQSBwcm9qZWN0LgpQSwECFAAUAAAAAAAASGld7kdYZh0AAAAdAAAAEwAAAAAAAAAAAAAA
+gAEAAAAAW0NvbnRlbnRfVHlwZXNdLnhtbFBLAQIUABQAAAAAAABIaV30/mHEIAAAACAAAAARAAAA
+AAAAAAAAAACAAU4AAAB3b3JkL2RvY3VtZW50LnhtbFBLAQIUABQAAAAAAABIaV044y5/JwAAACcA
+AAATAAAAAAAAAAAAAACAAZ0AAAB3b3JkL3ZiYVByb2plY3QuYmluUEsFBgAAAAADAAMAwQAAAPUA
+AAAAAA==
+
+--=_mixed_inv4471--

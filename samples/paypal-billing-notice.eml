@@ -1,0 +1,18 @@
+Return-Path: <billing@paypal-billing.com>
+Authentication-Results: mx.example.org; spf=pass; dkim=pass; dmarc=pass
+From: "Billing Department" <billing@paypal-billing.com>
+To: lior@example.org
+Subject: We could not process your payment
+Date: Mon, 9 Nov 2026 15:20:44 +0000
+Message-ID: <bill-5520@paypal-billing.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+Hello,
+
+Your most recent payment did not go through. Please review the card on file
+when you have a moment:
+
+https://www.paypal-billing.com/review
+
+Billing Department

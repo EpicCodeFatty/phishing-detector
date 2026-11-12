@@ -1,0 +1,20 @@
+Return-Path: <news@northwind-traders.com>
+Authentication-Results: mx.example.org; spf=pass; dkim=pass; dmarc=pass
+From: "Northwind Traders" <news@northwind-traders.com>
+To: subscriber@example.org
+Subject: Spring sale: 20% off expires today
+Date: Thu, 12 Nov 2026 05:30:00 +0000
+Message-ID: <nl-2026-46@northwind-traders.com>
+List-Unsubscribe: <https://northwind-traders.com/unsubscribe>
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+
+<html>
+<body>
+<h1>Spring sale</h1>
+<p>Everything in the garden range is 20% off. Act now, the offer ends at midnight.</p>
+<p>Browse the range at
+<a href="https://links.nw-mailer.net/c/8841">northwind-traders.com/garden</a>.</p>
+<p><a href="https://northwind-traders.com/unsubscribe">Unsubscribe</a></p>
+</body>
+</html>

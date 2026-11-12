@@ -1,0 +1,18 @@
+Return-Path: <tracking@parcel-status.net>
+Authentication-Results: mx.example.org; spf=pass; dkim=none; dmarc=fail header.from=parcel-status.net
+From: "DHL Express" <tracking@parcel-status.net>
+To: noa@example.org
+Subject: Your parcel could not be delivered
+Date: Thu, 12 Nov 2026 07:50:12 +0000
+Message-ID: <trk-88213@parcel-status.net>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+Hello,
+
+We tried to deliver your parcel today but nobody was available to sign for it.
+
+Choose a new delivery date here:
+https://parcel-status.net/track/88213
+
+DHL Express

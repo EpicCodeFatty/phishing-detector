@@ -1,0 +1,21 @@
+Return-Path: <no-reply@rnicrosoft.com>
+Authentication-Results: mx.example.org; spf=pass; dkim=pass; dmarc=pass
+From: "Account Security" <no-reply@rnicrosoft.com>
+To: dana@example.org
+Subject: Sign-in from a new device
+Date: Tue, 10 Nov 2026 06:41:09 +0000
+Message-ID: <a81f0c3e@rnicrosoft.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+Hello Dana,
+
+Someone signed in to your account from a device we have not seen before.
+
+  Location: Rotterdam, Netherlands
+  Time:     10 November 2026, 06:38 UTC
+
+If this was you, no action is needed. If it was not, reply to this message
+and our team will help you secure the account.
+
+Account Security

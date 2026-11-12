@@ -1,0 +1,17 @@
+Return-Path: <maya.cohen@contoso.com>
+Authentication-Results: mx.contoso.com; spf=pass; dkim=pass; dmarc=pass
+From: "Maya Cohen" <maya.cohen@contoso.com>
+To: team@contoso.com
+Subject: Team lunch on Thursday
+Date: Mon, 9 Nov 2026 10:12:00 +0000
+Message-ID: <lunch-1109@contoso.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+Hi all,
+
+We are going out for lunch on Thursday at 12:30 to welcome the new joiners.
+The table is booked for ten. Let me know by Wednesday if you cannot make it
+or have any dietary requirements.
+
+Maya
