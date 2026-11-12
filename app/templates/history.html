@@ -1,0 +1,42 @@
+{#-
+  Receives:
+    scans: list[ScanRecord]    most recent first; created_at is in UTC
+-#}
+{% extends "base.html" %}
+
+{% block title %}History{% endblock %}
+
+{% block content %}
+<h1>Scan history</h1>
+
+{% if scans %}
+<div class="table-scroll">
+  <table class="history">
+    <thead>
+      <tr>
+        <th scope="col">Time (UTC)</th>
+        <th scope="col">File</th>
+        <th scope="col">From</th>
+        <th scope="col">Verdict</th>
+        <th scope="col" class="numeric">Score</th>
+        <th scope="col">Served by</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for scan in scans %}
+      <tr>
+        <td class="timestamp">{{ scan.created_at.strftime("%Y-%m-%d %H:%M:%S") if scan.created_at }}</td>
+        <td>{{ scan.filename }}</td>
+        <td>{{ scan.sender or "(none)" }}</td>
+        <td><span class="verdict-tag verdict-{{ scan.verdict | lower }}">{{ scan.verdict }}</span></td>
+        <td class="numeric">{{ scan.score }}</td>
+        <td class="served-by">{{ scan.served_by }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="empty">No scans yet. <a href="{{ url_for('pages.upload_form') }}">Scan an email</a> to start the history.</p>
+{% endif %}
+{% endblock %}

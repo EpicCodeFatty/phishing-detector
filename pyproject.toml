@@ -17,3 +17,8 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 testpaths = ["tests"]
 # The repository root goes on sys.path so the tests can import app.detector and detect.
 pythonpath = ["."]
+# A misspelt marker would silently select nothing; this makes it an error instead.
+addopts = "--strict-markers"
+markers = [
+    "integration: needs the local PostgreSQL container (docker compose up -d --wait); deselect with -m \"not integration\"",
+]

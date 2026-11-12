@@ -1,0 +1,65 @@
+{#-
+  Receives:
+    result: Result         the engine's verdict, score, decided_by, findings and category_scores
+    filename: str          as uploaded; attacker-controlled, like every string from the email
+    sender: str            the raw From header, '' when the input had no headers
+    subject: str           '' when the input had no headers
+    served_by: str         identifier of the instance that ran the scan: its EC2 instance ID
+    saved: bool            False when the scan could not be written to the history
+    scan_id: int | None    the history id, None when not saved
+-#}
+{% extends "base.html" %}
+
+{% block title %}{{ result.verdict }}: {{ filename }}{% endblock %}
+
+{% block content %}
+{% if not saved %}
+<p class="notice notice-warning" role="status">
+  This scan could not be saved to the history. The result below is complete.
+</p>
+{% endif %}
+
+<section class="verdict verdict-{{ result.verdict | lower }}" aria-label="Verdict">
+  <p class="verdict-label">{{ result.verdict }}</p>
+  <p class="verdict-score">Score {{ result.score }}/100</p>
+  <p class="verdict-reason">Decided by {{ result.decided_by }}</p>
+</section>
+
+<dl class="scan-details">
+  <dt>File</dt>
+  <dd>{{ filename }}</dd>
+  <dt>From</dt>
+  <dd>{{ sender or "(none)" }}</dd>
+  <dt>Subject</dt>
+  <dd>{{ subject or "(none)" }}</dd>
+  <dt>Served by</dt>
+  <dd class="served-by">{{ served_by }}</dd>
+  {% if scan_id is not none %}
+  <dt>Scan</dt>
+  <dd>#{{ scan_id }}</dd>
+  {% endif %}
+</dl>
+
+<h2>Findings</h2>
+{#- category_scores lists the categories in the engine's order: links, sender, wording, attachments. #}
+{% for category, category_score in result.category_scores.items() %}
+<section class="finding-group">
+  <h3>{{ category | capitalize }} <span class="category-score">{{ category_score }} points</span></h3>
+  <ul class="findings">
+    {% for found in result.findings if found.category == category %}
+    <li class="finding finding-{{ found.severity }}">
+      <span class="severity">{{ found.severity }}</span>
+      <p class="finding-reason">{{ found.reason }}</p>
+      {% if found.evidence %}
+      <p class="finding-evidence"><code>{{ found.evidence }}</code></p>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% else %}
+<p class="empty">No phishing indicators were found.</p>
+{% endfor %}
+
+<p class="next-action"><a href="{{ url_for('pages.upload_form') }}">Scan another email</a></p>
+{% endblock %}

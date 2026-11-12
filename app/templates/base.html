@@ -1,0 +1,33 @@
+{#-
+  The shared frame of every page: head, stylesheet, header with navigation, footer.
+  Pages extend this template and fill two blocks: title and content.
+  Restyling the application means editing this file and static/style.css only.
+-#}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{% endblock %} | Phishing Detector</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-name" href="{{ url_for('pages.upload_form') }}">Phishing Detector</a>
+    <nav class="site-nav" aria-label="Main">
+      {%- for endpoint, label in [("pages.upload_form", "Scan"), ("pages.history", "History")] %}
+      <a href="{{ url_for(endpoint) }}"
+         {%- if request.endpoint == endpoint %} aria-current="page"{% endif %}>{{ label }}</a>
+      {%- endfor %}
+    </nav>
+  </header>
+
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    Uploaded files are analysed in memory and never stored. Only the verdict and its findings are kept.
+  </footer>
+</body>
+</html>

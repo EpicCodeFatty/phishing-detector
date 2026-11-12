@@ -1,0 +1,16 @@
+{#-
+  Receives:
+    status: int     the HTTP status code
+    message: str    a friendly explanation; never a stack trace or an internal detail
+-#}
+{% extends "base.html" %}
+
+{% block title %}Error {{ status }}{% endblock %}
+
+{% block content %}
+<section class="error" aria-labelledby="error-heading">
+  <p class="error-status">Error {{ status }}</p>
+  <h1 id="error-heading">{{ message }}</h1>
+  <p class="next-action"><a href="{{ url_for('pages.upload_form') }}">Back to the scanner</a></p>
+</section>
+{% endblock %}

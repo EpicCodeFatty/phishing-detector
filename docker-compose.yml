@@ -1,0 +1,32 @@
+# Local PostgreSQL for development and the integration tests. Nothing else runs here:
+# the application itself runs on the host with `flask --app app.web run`.
+#
+#   docker compose up -d --wait    start it, and wait until it accepts connections
+#   docker compose down            stop it (the data survives in the pgdata volume)
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: phishing
+      POSTGRES_USER: phishing
+      # Local-only password for a container that listens on localhost alone. It is not
+      # a leaked credential: it never reaches AWS, where RDS generates the password and
+      # keeps it in Secrets Manager.
+      POSTGRES_PASSWORD: localdev
+    ports:
+      # Bound to the loopback interfaces only, so the database is unreachable from the
+      # network. Both are needed: "localhost" resolves to ::1 first, and with only the
+      # IPv4 binding every connection waited out the 5-second connect timeout on ::1.
+      - "127.0.0.1:5432:5432"
+      - "[::1]:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phishing -d phishing"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  pgdata:

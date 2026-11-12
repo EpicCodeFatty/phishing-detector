@@ -1,0 +1,21 @@
+{#-
+  Receives:
+    max_mb: int    the upload size limit, in megabytes
+-#}
+{% extends "base.html" %}
+
+{% block title %}Scan an email{% endblock %}
+
+{% block content %}
+<h1>Scan an email</h1>
+<p class="lead">
+  Upload an email saved as an <code>.eml</code> file, or a text file containing the message.
+  The limit is {{ max_mb }} MB.
+</p>
+
+<form class="upload-form" action="{{ url_for('pages.scan') }}" method="post" enctype="multipart/form-data">
+  <label for="file">Email file</label>
+  <input id="file" name="file" type="file" accept=".eml,.txt,message/rfc822,text/plain" required>
+  <button type="submit">Scan</button>
+</form>
+{% endblock %}

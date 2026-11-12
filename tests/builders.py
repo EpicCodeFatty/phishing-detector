@@ -3,11 +3,13 @@
 import io
 import textwrap
 import zipfile
+from pathlib import Path
 
 from app.detector.models import Attachment, Finding, ParsedEmail
 
 EXECUTABLE_BYTES = b"MZ\x90\x00 inert test bytes"
 PDF_BYTES = b"%PDF-1.4 inert test bytes"
+SAMPLES = Path(__file__).parent.parent / "samples"
 
 
 def make_email(**fields: object) -> ParsedEmail:
@@ -58,3 +60,13 @@ def eml(text: str) -> bytes:
 def codes_and_severities(findings: list[Finding]) -> list[tuple[str, str]]:
     """Reduce findings to the two fields most tests assert on."""
     return [(found.code, found.severity) for found in findings]
+
+
+def upload_of(content: bytes, filename: str) -> dict[str, tuple[io.BytesIO, str]]:
+    """Return form data that uploads the given bytes, as a browser would."""
+    return {"file": (io.BytesIO(content), filename)}
+
+
+def sample_upload(name: str) -> dict[str, tuple[io.BytesIO, str]]:
+    """Return form data that uploads one file from samples/."""
+    return upload_of((SAMPLES / name).read_bytes(), name)

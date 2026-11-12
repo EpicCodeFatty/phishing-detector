@@ -47,15 +47,34 @@ python detect.py samples/paypal-phish.eml --json    # the same result as JSON
 The exit code carries the verdict: `0` Safe, `1` Suspicious, `2` Phishing, `3` if the file could not
 be read.
 
+Run the web application. It needs the local PostgreSQL container, which Docker runs from
+`docker-compose.yml`:
+
+```bash
+docker compose up -d --wait             # PostgreSQL 16 on localhost:5432
+echo DB_PASSWORD=localdev > .env        # once; .env is git-ignored, localdev is the container's password
+flask --app app.web run --port 8000     # then open http://127.0.0.1:8000
+```
+
+The scans table is created on first use. Without the container the application still starts and
+scans still work; results simply are not saved, and the history page returns 503.
+`docker compose down` stops the database and keeps its data.
+
 Before every commit:
 
 ```bash
 ruff format .
 ruff check .
-pytest
+pytest -m "not integration"             # needs nothing running
 ```
 
-TODO — running the web application locally.
+The database tests are marked `integration` and run against the container, in a separate
+`phishing_test` database so the local history is left alone:
+
+```bash
+docker compose up -d --wait
+pytest -m integration
+```
 
 ### On AWS
 
@@ -158,10 +177,17 @@ across a target group of one.
 **`/health` does not touch the database.**
 If the health check queried RDS, a database outage would mark both instances unhealthy at once, the
 ALB would fail open, and the ASG could begin replacing healthy instances in a loop. Instead the
-database failure surfaces as a 5XX alarm and a friendly error on the scan page, while the instances
-stay in service.
+instances stay in service and the outage degrades the service rather than taking it down: a scan
+still shows its result, with a notice that it was not saved, and the history page returns a friendly
+503 that the 5XX alarm picks up.
 *Trade-off:* the health check reports less than the full truth. The database is monitored separately
 through its own CloudWatch metrics.
+
+**One database connection per request, no pool.**
+Each request opens a connection, with a 5-second connect timeout, and closes it when done. At the
+traffic of a demo a pool solves no problem, and pooled connections can go stale across an RDS failover.
+*Trade-off:* every database request pays for a new connection, a few milliseconds inside the VPC.
+`psycopg_pool` would be a two-line change if the load ever justified it.
 
 **Severity levels before additive scoring.**
 Each finding carries a severity. One critical finding (a lookalike sender domain such as `paypa1`, an
