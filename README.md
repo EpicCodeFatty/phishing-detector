@@ -252,10 +252,25 @@ Each request is one JSON line. Logs Insights can then filter and aggregate by fi
 text.
 *Trade-off:* less readable when tailing the file directly on an instance.
 
-**Every resource is tagged, and the log group is created in Terraform.**
+**Every resource is tagged, and the log groups are created in Terraform.**
 A `default_tags` block tags everything with `Project = phishing-detector`, which is what makes the
-post-teardown verification reliable. Creating the log group explicitly means `terraform destroy`
-removes it, rather than leaving an orphan behind.
+post-teardown verification reliable. Creating the log groups explicitly means `terraform destroy`
+removes them, rather than leaving orphans behind.
+
+**The 5XX alarms count errors, they do not measure an error rate.**
+Each fires at five errors in one minute. With demo-level traffic a percentage swings from 0 to 100 on
+a single request, so a rate would be either silent or set off by one failure.
+*Trade-off:* a fixed count does not scale with traffic. At production volume these would be error-rate
+alarms built with metric math (5XX ÷ `RequestCount`), with a minimum request count.
+
+**The unhealthy-target alarm fires during every deploy, and is left that way.**
+A new instance is registered with the target group as soon as it launches, and fails the health check
+for the two to three minutes its boot takes. So each replacement sends one ALARM email and one OK
+email. The alarm is telling the truth: capacity really is reduced for those minutes. It is kept this
+sensitive so that a real failure is reported within two minutes.
+*Trade-off:* expected emails on every deployment. The production answer is an Auto Scaling lifecycle
+hook that registers an instance only once its boot has finished, or suppressing the alarm while a
+deployment runs.
 
 ### Cost
 

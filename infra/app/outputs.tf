@@ -1,4 +1,5 @@
-# What is needed to test the stack, a deployment and a teardown from a terminal.
+# What is needed to test the stack, a deployment and a teardown from a terminal, and to
+# find the dashboard and the logs.
 
 output "alb_dns_name" {
   description = "DNS name of the load balancer. It changes with every apply; read it from here each time."
@@ -48,4 +49,19 @@ output "artifact_key" {
 output "release" {
   description = "The current release: the first 12 hex characters of the zip's SHA-256. /health reports the same value once the instances run it."
   value       = local.release
+}
+
+output "dashboard_url" {
+  description = "The CloudWatch dashboard, ready to paste into a browser signed in to the account."
+  value       = "https://${var.region}.console.aws.amazon.com/cloudwatch/home?region=${var.region}#dashboards/dashboard/${aws_cloudwatch_dashboard.main.dashboard_name}"
+}
+
+output "app_log_group" {
+  description = "Log group holding the application's JSON log lines, one stream per instance."
+  value       = aws_cloudwatch_log_group.app.name
+}
+
+output "boot_log_group" {
+  description = "Log group holding each instance's boot log (cloud-init-output.log). The first place to look when an instance never becomes healthy."
+  value       = aws_cloudwatch_log_group.boot.name
 }

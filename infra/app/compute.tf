@@ -113,6 +113,12 @@ resource "aws_launch_template" "app" {
       db_name       = local.base.db_name
       db_user       = local.base.db_username
       db_secret_arn = local.base.db_secret_arn
+
+      # The CloudWatch agent's configuration, as one line of JSON (agent.tf), and the log
+      # file the application writes and the agent reads. The JSON names the log groups by
+      # their resources' attributes, so the groups exist before this template does.
+      cw_agent_config = local.cw_agent_config
+      app_log_file    = local.app_log_file
     }),
     "\r\n", "\n"
   ))
@@ -177,6 +183,16 @@ resource "aws_autoscaling_group" "app" {
       skip_matching          = true
     }
   }
+
+  # Group metrics are free. They are what shows self-healing and a rollout on the
+  # dashboard: in service drops, pending rises, in service returns.
+  enabled_metrics = [
+    "GroupDesiredCapacity",
+    "GroupInServiceInstances",
+    "GroupPendingInstances",
+    "GroupTerminatingInstances",
+  ]
+  metrics_granularity = "1Minute"
 
   # The group is the one resource the provider never applies default_tags to, so it is
   # tagged here. propagate_at_launch is false because these tag the group only: the launch

@@ -1,8 +1,9 @@
 #!/bin/bash
 set -euxo pipefail
 
-# Boot script for the application instances: download the release, install it into a
-# virtualenv, and run it under gunicorn as an unprivileged systemd service.
+# Boot script for the application instances: start the CloudWatch agent, download the
+# release, install it into a virtualenv, and run it under gunicorn as an unprivileged
+# systemd service.
 # Release: ${release}
 #
 # Every line of this script, and its output, lands in /var/log/cloud-init-output.log, the
@@ -49,8 +50,38 @@ INSTANCE_ID=$(retry 5 imds instance-id)
 test -n "$INSTANCE_ID"
 
 # pip is a separate package on Amazon Linux. Without it the virtualenv can be created
-# without pip, and the install fails on a missing file rather than a network error.
-retry 12 dnf install -y python3.12 python3.12-pip
+# without pip, and the install fails on a missing file rather than a network error. The
+# CloudWatch agent comes in the same transaction.
+retry 12 dnf install -y python3.12 python3.12-pip amazon-cloudwatch-agent
+
+# --- monitoring: started first, so the rest of this boot is visible in CloudWatch --------
+# The agent ships this boot log and the application log, and reports memory and disk. It
+# starts before anything else is set up, for two reasons. A failed download, install or
+# self-test below can then be read in the console, without racing the Auto Scaling Group to
+# an instance it is about to replace. And a broken agent stops the boot here, before the
+# application exists: an instance with no monitoring must not pass a health check.
+#
+# Quoted heredoc. Terraform has already put the configuration, one line of JSON, in place
+# of the template variable; the quotes stop the shell from then expanding the agent's own
+# placeholders inside that JSON, which would fail under set -u.
+CW_CONFIG=/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+cat > "$CW_CONFIG" <<'CWEOF'
+${cw_agent_config}
+CWEOF
+
+# The agent runs as cwagent, a user its package creates, and must be able to read this boot
+# log. Nothing in this script prints a secret, so world-readable is acceptable where the
+# image does not already make it so. runuser rather than setfacl: it is part of the base
+# system, and a missing command here would fail every boot.
+if ! runuser -u cwagent -- test -r /var/log/cloud-init-output.log; then
+  chmod o+r /var/log/cloud-init-output.log
+fi
+
+# fetch-config validates the JSON and, with -s, starts the agent and enables it at boot. An
+# invalid configuration fails here, and set -e stops the boot. The application's log does
+# not exist yet; the agent waits for it to appear.
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config -m ec2 -s -c "file:$CW_CONFIG"
 
 # The service runs as its own unprivileged user. Port 8000 needs no privilege, and if the
 # application is ever compromised, it is as a user that owns nothing.
@@ -100,7 +131,7 @@ DB_NAME=${db_name}
 DB_USER=${db_user}
 DB_SECRET_ARN=${db_secret_arn}
 DB_SSLMODE=require
-LOG_FILE=/var/log/phishing-app/app.log
+LOG_FILE=${app_log_file}
 TLDEXTRACT_CACHE=/var/cache/phishing-app/tldextract
 ENVEOF
 chmod 0600 /etc/phishing-app.env
@@ -111,7 +142,9 @@ chmod 0600 /etc/phishing-app.env
 # --no-control-socket: gunicorn would otherwise try to create a control socket under the
 #   service user's home directory, which does not exist, and warn about it at every start.
 # LogsDirectory makes systemd create /var/log/phishing-app, owned by the service user,
-#   before every start. Without it the application cannot create its log file.
+#   before every start. Without it the application cannot create its log file. The
+#   directory (0755) and the file (0644, from systemd's default umask) are left readable by
+#   others on purpose: that is how the CloudWatch agent, a different user, reads the log.
 # CacheDirectory does the same for /var/cache/phishing-app, where TLDEXTRACT_CACHE in the
 #   environment file points. The engine's domain parser caches its bundled suffix list on
 #   disk, by default under a home directory this user does not have; it would carry on
