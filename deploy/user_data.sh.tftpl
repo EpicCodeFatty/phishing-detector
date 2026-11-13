@@ -1,0 +1,115 @@
+#!/bin/bash
+set -euxo pipefail
+
+# Boot script for the application instances, phase 4: a placeholder HTTP server that answers
+# every request with the instance's own ID. Phase 5 replaces the middle of this script.
+#
+# Every line of this script, and its output, lands in /var/log/cloud-init-output.log, the
+# first place to look if an instance never becomes healthy. set -x prints each command;
+# set -e stops at the first failure rather than carrying on with a half-built instance.
+#
+# Terraform renders this file with templatefile(), which claims a dollar sign or a percent
+# sign followed by an opening brace as its own syntax. Write either with the sign doubled,
+# or the apply fails. Plain $VAR and $(command) are left alone.
+
+# retry <attempts> <command...>, for the steps that depend on the network. A boot script
+# runs exactly once, so without this a transient failure is permanent. The failure message
+# goes to stderr, so that it reaches the log even when retry runs inside $(...), where
+# stdout is captured as the result.
+retry() {
+  local attempts=$1; shift
+  local n=1
+  until "$@"; do
+    if [ "$n" -ge "$attempts" ]; then
+      echo "FAILED after $attempts attempts: $*" >&2
+      return 1
+    fi
+    n=$((n + 1))
+    sleep 10
+  done
+}
+
+# IMDSv2: a PUT for a session token, then a GET that presents it. curl -f throughout,
+# because without it a failed request exits 0 with an error page as its output, and set -e
+# sees nothing wrong.
+imds() {
+  local token
+  token=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+  curl -sf -H "X-aws-ec2-metadata-token: $token" \
+    "http://169.254.169.254/latest/meta-data/$1"
+}
+
+INSTANCE_ID=$(retry 5 imds instance-id)
+test -n "$INSTANCE_ID"
+
+retry 12 dnf install -y python3.12
+
+# The service runs as its own unprivileged user. Port 8000 needs no privilege, and if the
+# application is ever compromised, it is as a user that owns nothing.
+useradd --system --no-create-home --shell /sbin/nologin phishing
+
+# Quoted heredoc: the shell expands nothing inside it.
+# The server binds 0.0.0.0, not 127.0.0.1. Listening on the loopback address only, it would
+# answer itself and nothing else, and the load balancer's health check would fail.
+mkdir -p /opt/app
+cat > /opt/app/hello.py <<'PYEOF'
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+INSTANCE = os.environ.get("INSTANCE_ID", "unknown")
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = f"hello from {INSTANCE}\n".encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
+PYEOF
+
+# Unquoted heredoc, on purpose: the one place a shell variable must be expanded.
+cat > /etc/phishing-app.env <<ENVEOF
+INSTANCE_ID=$INSTANCE_ID
+ENVEOF
+chmod 0640 /etc/phishing-app.env
+
+# StartLimitIntervalSec=0 with RestartSec=3: by default systemd stops restarting a unit that
+# fails five times in ten seconds and leaves it dead. For a service whose only supervisor is
+# systemd, giving up is the wrong behaviour.
+cat > /etc/systemd/system/phishing-app.service <<'SVCEOF'
+[Unit]
+Description=Phishing detector (placeholder)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+User=phishing
+Group=phishing
+EnvironmentFile=/etc/phishing-app.env
+ExecStart=/usr/bin/python3.12 /opt/app/hello.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+systemctl daemon-reload
+systemctl enable --now phishing-app
+
+# A self-test and a marker. If the last line is absent from the log, the script died
+# earlier, and set -x shows where.
+retry 10 curl -sf http://127.0.0.1:8000/health
+echo "user_data finished OK"

@@ -149,8 +149,9 @@ instances survive long enough to investigate.
 
 **Chained security groups.**
 `alb-sg` accepts :80 from the internet. `app-sg` accepts :8000 only from `alb-sg`. `db-sg` accepts
-:5432 only from `app-sg`. No security group references a CIDR range except the ALB's public ingress,
-and port 22 is not open anywhere.
+:5432 only from `app-sg`. No security group admits traffic from a CIDR range except the load balancer's
+listener, and port 22 is not open anywhere. Outbound, the instances are allowed :443 to the internet,
+which is required for the AWS APIs and the package repositories.
 
 **RDS PostgreSQL, `db.t4g.micro`, single-AZ, encrypted, not publicly accessible.**
 *Trade-off:* the database is a single point of failure, while the application tier is spread across two
@@ -181,6 +182,14 @@ require a redeploy. The password does not appear in Terraform variables, in stat
 **Shell access through SSM Session Manager.**
 No key pairs, no bastion host, no port 22 in any security group. Every session is authenticated and
 authorized through IAM.
+
+**AWS-managed policies for the two agents, hand-written policies for the data.**
+The instance role attaches `AmazonSSMManagedInstanceCore` and `CloudWatchAgentServerPolicy`. They are
+the documented requirements of the SSM agent and the CloudWatch agent, and rewriting them by hand means
+guessing at a list of actions that AWS maintains and changes. Where the scope matters, reading one S3
+object and one database secret, the permission is an inline policy written against that exact ARN.
+*Trade-off:* the managed policies are broader than this project uses, and AWS can change them without
+anything changing in this repository.
 
 **HTTP only, no TLS.**
 There is no domain for this exercise, so there is no ACM certificate to attach to the listener.
