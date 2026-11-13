@@ -328,7 +328,7 @@ LogsDirectory=phishing-app
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
+ProtectHome=tmpfs
 
 [Install]
 WantedBy=multi-user.target
@@ -386,6 +386,12 @@ changes. With the local, a new instance can boot and ask for a zip that is not t
   service dies on its first log line.
 - **`ProtectSystem=full`** makes `/usr`, `/boot` and `/etc` read-only for the service. The app writes
   only to its log directory and keeps uploads in memory, so it needs nothing else.
+- **`ProtectHome=tmpfs`, not `true`.** libpq, the PostgreSQL client library, looks for an optional
+  client certificate in `~/.postgresql/` on every TLS connection. A missing file is fine; a file it is
+  not allowed to look at is a fatal error. `ProtectHome=true` makes `/home` unreadable, so the lookup
+  fails with "Permission denied" and every database connection fails. `tmpfs` hides the real `/home`
+  behind an empty one: the lookup finds nothing, and the protection stays. Found in phase 5 on the
+  first deploy; recorded in BUILD_LOG.
 - **`--chdir /opt/phishing`** puts `/opt/phishing` on `sys.path`, which is how `app.web` is found.
 - **The self-test waits longer than in phase 4** (12 attempts): gunicorn imports Flask, boto3 and the
   engine before it answers.

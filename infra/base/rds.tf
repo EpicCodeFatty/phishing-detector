@@ -27,6 +27,15 @@ resource "aws_security_group" "db" {
 }
 
 resource "aws_db_instance" "main" {
+  #checkov:skip=CKV_AWS_157:Single-AZ to halve cost; /health does not touch the database, so an outage degrades, not stops
+  #checkov:skip=CKV_AWS_161:Password auth from a rotated Secrets Manager secret; IAM auth needs app changes and an RDS modify
+  #checkov:skip=CKV_AWS_118:Enhanced monitoring needs a role and bills log ingestion; standard RDS metrics suffice for a demo
+  #checkov:skip=CKV_AWS_353:The RDS API rejected Performance Insights for db.t4g.micro at create time (BUILD_LOG, 12 Nov)
+  #checkov:skip=CKV_AWS_293:Deletion protection off on purpose; the assignment requires destroying and verifying the teardown
+  #checkov:skip=CKV_AWS_129:No log exports to CloudWatch; enabling them modifies the database, which this phase does not touch
+  #checkov:skip=CKV2_AWS_30:Query logging needs a custom parameter group and a reboot; out of scope for a demo database
+  #checkov:skip=CKV2_AWS_60:Snapshot tag copying is cheap but changing it modifies RDS; left to the owner (security-scan.md)
+  #checkov:skip=CKV_AWS_226:False positive; auto_minor_version_upgrade is unset and the provider's default is already true
   identifier     = "${var.project}-db"
   engine         = "postgres"
   engine_version = "16" # major version only; AWS selects the current minor

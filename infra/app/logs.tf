@@ -35,6 +35,8 @@ locals {
 }
 
 resource "aws_cloudwatch_log_group" "app" {
+  #checkov:skip=CKV_AWS_158:Encrypted at rest by CloudWatch by default; a customer-managed key adds a key policy and a monthly fee
+  #checkov:skip=CKV_AWS_338:Seven days is a cost decision; the stack and its logs are destroyed daily
   name              = "/${var.project}/app"
   retention_in_days = local.log_retention_days
 }
@@ -42,6 +44,8 @@ resource "aws_cloudwatch_log_group" "app" {
 # /var/log/cloud-init-output.log from every instance. A boot that fails can be read here,
 # without connecting to an instance that the Auto Scaling Group is about to replace.
 resource "aws_cloudwatch_log_group" "boot" {
+  #checkov:skip=CKV_AWS_158:Encrypted at rest by CloudWatch by default; a customer-managed key adds a key policy and a monthly fee
+  #checkov:skip=CKV_AWS_338:Seven days is a cost decision; the stack and its logs are destroyed daily
   name              = "/${var.project}/boot"
   retention_in_days = local.log_retention_days
 }

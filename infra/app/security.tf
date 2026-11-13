@@ -44,6 +44,7 @@ resource "aws_security_group" "alb" {
 # The service is public by design. The variable exists so that it can be narrowed to known
 # addresses without editing the rule.
 resource "aws_vpc_security_group_ingress_rule" "alb_http" {
+  #checkov:skip=CKV_AWS_260:A public web service by design; allowed_ingress_cidrs narrows it without editing the rule
   for_each = toset(var.allowed_ingress_cidrs)
 
   security_group_id = aws_security_group.alb.id

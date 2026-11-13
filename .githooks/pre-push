@@ -1,0 +1,33 @@
+#!/bin/sh
+# Before every push: scan the repository's whole history for secrets with gitleaks, and
+# block the push if anything is found. A secret deleted in a later commit is still in the
+# history, which is why this scans every commit and not only the files as they are now.
+#
+# Turned on once per clone, because a hook path is local configuration and is not cloned:
+#
+#     git config core.hooksPath .githooks
+#
+# gitleaks is taken from PATH, then from tools/gitleaks.exe. If neither exists the push goes
+# ahead with a warning: a missing tool should not block all work. gitleaks 8.19 and later
+# take `gitleaks git`; older versions used `gitleaks detect`.
+
+set -u
+
+root=$(git rev-parse --show-toplevel) || exit 1
+
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks=gitleaks
+elif [ -x "$root/tools/gitleaks.exe" ]; then
+  gitleaks="$root/tools/gitleaks.exe"
+else
+  echo "pre-push: gitleaks is not on PATH or in tools/. Pushing WITHOUT a secret scan." >&2
+  exit 0
+fi
+
+# --redact keeps anything found out of the terminal. Any failure blocks the push, including
+# gitleaks failing to run: a scan that did not happen is not a clean scan.
+if ! "$gitleaks" git "$root" --redact --no-banner; then
+  echo "pre-push: gitleaks reported a finding, or could not scan (see above). Push blocked." >&2
+  echo "pre-push: a real secret must be rotated; removing the commit does not remove it." >&2
+  exit 1
+fi

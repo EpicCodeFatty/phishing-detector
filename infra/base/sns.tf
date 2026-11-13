@@ -10,6 +10,7 @@
 # AWS-managed alias/aws/sns key, because its key policy cannot be edited to admit them, and a
 # customer-managed key costs a monthly fee to protect alarm text that contains no secrets.
 resource "aws_sns_topic" "alerts" {
+  #checkov:skip=CKV_AWS_26:Alarms cannot publish to a topic under the AWS-managed SNS key; a CMK with a key policy is needed
   name = "${var.project}-alerts"
 }
 

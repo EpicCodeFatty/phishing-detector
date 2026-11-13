@@ -8,6 +8,7 @@
 # compromised instance cannot use the database's subnet to reach the internet.
 
 data "aws_availability_zones" "available" {
+  #checkov:skip=CKV_AWS_394:Only the first two zones by name are used (locals); a zone AWS adds later is never picked up
   state = "available"
 
   # Only the region's regular zones, never a Local Zone the account has opted into.
@@ -39,6 +40,7 @@ locals {
 }
 
 resource "aws_vpc" "main" {
+  #checkov:skip=CKV2_AWS_11:flow log is defined in infra/app (flowlogs.tf), which checkov cannot see from this stack
   cidr_block = var.vpc_cidr
 
   # Both needed. enable_dns_hostnames is the one easy to miss, and confusing when missed:

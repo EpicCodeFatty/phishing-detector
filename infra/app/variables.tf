@@ -45,13 +45,17 @@ variable "health_check_type" {
 variable "health_check_grace_seconds" {
   type        = number
   description = "How long a new instance is protected from being replaced for failing the load balancer's health check. Keep it at least 60 seconds longer than a measured boot."
-  default     = 240
+
+  # A measured boot takes 118 seconds (cloud-init: "Up 118.51 seconds"); 118 + 60, rounded up.
+  default = 180
 }
 
 variable "instance_warmup_seconds" {
   type        = number
   description = "How long an instance refresh waits after launching a replacement before moving on to the next instance. Keep it at least 60 seconds longer than the grace period."
-  default     = 300
+
+  # The grace period plus 60.
+  default = 240
 
   # Inside the grace period the group treats every instance as healthy. A refresh that moved
   # on within it would take a release that cannot boot for healthy and replace the last
@@ -66,4 +70,10 @@ variable "allowed_ingress_cidrs" {
   type        = list(string)
   description = "IPv4 ranges allowed to reach the load balancer on port 80. One security group rule per entry."
   default     = ["0.0.0.0/0"]
+}
+
+variable "enable_error_simulation" {
+  type        = bool
+  description = "Whether /simulate-error raises a deliberate 500. It exists for the demo, to fire the 5XX alarm on demand, and is on for the review. The application's own default is off, and a production deployment would not have the route at all."
+  default     = true
 }

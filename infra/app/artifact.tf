@@ -52,6 +52,12 @@ data "archive_file" "app" {
 # each adds resources and cost to protect zips that are rebuilt from git in seconds.
 
 resource "aws_s3_bucket" "artifacts" {
+  #checkov:skip=CKV_AWS_18:Access logs need a second bucket; it holds only zips rebuilt from git, read by one role
+  #checkov:skip=CKV_AWS_21:Every release has its own key and is never overwritten, so versions would only copy it
+  #checkov:skip=CKV_AWS_144:Replication protects data that cannot be rebuilt; these zips are rebuilt from git in seconds
+  #checkov:skip=CKV_AWS_145:SSE-S3 rather than KMS; a customer-managed key adds cost to protect rebuildable zips
+  #checkov:skip=CKV2_AWS_61:No lifecycle rule needed; Terraform deletes each superseded release and the bucket daily
+  #checkov:skip=CKV2_AWS_62:No event notifications; nothing consumes them, the instances are told the exact key
   # A prefix, not a fixed name: bucket names are global across all AWS accounts, so a fixed
   # one can collide with someone else's, and re-creating the same name can briefly fail.
   bucket_prefix = "${var.project}-artifacts-"

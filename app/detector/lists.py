@@ -176,7 +176,7 @@ MAX_LOOKALIKE_EDIT_DISTANCE = 2
 MAX_LOOKALIKE_LENGTH_DIFFERENCE = 2
 
 # Characters that separate the tokens of a domain: paypal-secure.com is paypal, secure, com.
-DOMAIN_TOKEN_DELIMITERS = "-._"
+DOMAIN_TOKEN_DELIMITERS = "-._"  # nosec B105 # characters that split a domain, not a password
 
 # File signatures, mapped to the extensions they are consistent with.
 MAGIC = {

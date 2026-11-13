@@ -63,6 +63,14 @@ ORDER BY created_at DESC, id DESC
 LIMIT %s
 """
 
+# The same columns as RECENT_SQL, written out again rather than shared: a statement built
+# by joining strings is what a scanner, and a reviewer, is right to distrust on sight.
+SCAN_SQL = """
+SELECT id, created_at, filename, sender, subject, score, verdict, decided_by, findings, served_by
+FROM scans
+WHERE id = %s
+"""
+
 # PostgreSQL refuses NUL in TEXT and in JSONB strings, and a crafted email can put
 # one in its subject. Replaced with the Unicode replacement character on the way in.
 _NUL = "\x00"
@@ -117,6 +125,14 @@ def recent_scans(limit: int = DEFAULT_HISTORY_LIMIT) -> list[ScanRecord]:
         _ensure_schema(connection)
         rows = connection.cursor(row_factory=dict_row).execute(RECENT_SQL, (limit,)).fetchall()
     return [_record_from_row(row) for row in rows]
+
+
+def get_scan(scan_id: int) -> ScanRecord | None:
+    """Return the scan with this id, or None if there is none. Raises StorageError."""
+    with _connection() as connection:
+        _ensure_schema(connection)
+        row = connection.cursor(row_factory=dict_row).execute(SCAN_SQL, (scan_id,)).fetchone()
+    return _record_from_row(row) if row else None
 
 
 def db_is_reachable() -> bool:

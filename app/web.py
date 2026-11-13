@@ -1,6 +1,7 @@
 """HTTP layer: the upload form, scan results, scan history, a JSON API and the health check.
 
-The engine is used as analyze(raw_bytes) and nothing more. Every failure is
+The engine is run as analyze(raw_bytes) and nothing more. A stored scan is shown from
+its saved findings without running the engine again: the email was never kept. Every failure is
 turned into a friendly page here, or a JSON error under /api/; no stack trace,
 secret or database detail ever reaches a response.
 
@@ -25,12 +26,13 @@ from flask import (
     render_template,
     request,
 )
-from werkzeug.exceptions import BadRequest, HTTPException
+from werkzeug.exceptions import BadRequest, HTTPException, NotFound
 
 from app import config, db
 from app.detector import analyze
 from app.detector.models import Result
 from app.detector.parse import parse_email
+from app.detector.scoring import score_categories
 from app.logging_setup import configure_logging, error_fields, log_event
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,22 @@ SERVICE_UNAVAILABLE = 503
 
 # Event name for request lines whose route is unknown, such as a 404.
 UNROUTED_EVENT = "request"
+
+# Sent with every response, pages, JSON, errors and the stylesheet alike, unless the
+# response already has its own. They are the second layer behind template escaping: if
+# hostile markup from an email ever got through, the browser would still refuse to run a
+# script or load anything from another origin. The policy allows files from this origin
+# only, so the templates may contain no inline <script>, <style> or style="" attribute.
+# No Strict-Transport-Security: the service is plain HTTP, where browsers ignore it.
+SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    # The older form of frame-ancestors 'none', for browsers that do not read the policy.
+    "X-Frame-Options": "DENY",
+}
 
 pages = Blueprint("pages", __name__)
 
@@ -108,6 +126,7 @@ def create_app() -> Flask:
     app.register_blueprint(pages)
     app.before_request(_start_request_log)
     app.after_request(_finish_request_log)
+    app.after_request(_add_security_headers)
     app.register_error_handler(HTTPException, _handle_http_error)
     # The boundary for everything nobody anticipated: logged in full, shown generically.
     app.register_error_handler(Exception, _handle_unexpected_error)
@@ -124,16 +143,26 @@ def upload_form() -> str:
 def scan() -> str:
     """Analyse the uploaded file, save it to the history, and show the result."""
     outcome = _scan_upload()
-    return render_template(
-        "result.html",
-        result=outcome.result,
-        filename=outcome.record.filename,
-        sender=outcome.record.sender or "",
-        subject=outcome.record.subject or "",
-        served_by=outcome.record.served_by,
-        saved=outcome.scan_id is not None,
-        scan_id=outcome.scan_id,
-    )
+    return _result_page(outcome.result, outcome.record, outcome.scan_id)
+
+
+@pages.get("/scans/<int:scan_id>")
+def scan_view(scan_id: int) -> str | tuple[str | Response, int]:
+    """Show one stored scan in full: what the history row links to.
+
+    A 404 page when no scan has this id, and the same 503 page as /history when
+    the database is unavailable. The request's log line is the record of the view:
+    its event is this route's name, scan_view, and it carries the scan id.
+    """
+    g.log_fields["scan_id"] = scan_id
+    try:
+        record = db.get_scan(scan_id)
+    except db.StorageError as error:
+        log_event(logger, logging.ERROR, "scan_view_unavailable", **error_fields(error))
+        return _error_response(SERVICE_UNAVAILABLE)
+    if record is None:
+        raise NotFound()
+    return _result_page(_stored_result(record), record, record.id)
 
 
 @pages.get("/history")
@@ -181,7 +210,13 @@ def health() -> tuple[dict[str, str], int]:
 
 @pages.get("/simulate-error")
 def simulate_error() -> Response:
-    """Deliberate 500, used to demonstrate the 5XX alarm during the review."""
+    """Deliberate 500, to demonstrate the 5XX alarm. A 404 unless ENABLE_ERROR_SIMULATION is on.
+
+    Switched off, the route answers exactly like an address that does not exist, so it
+    neither fires the alarm nor tells a stranger that it is there.
+    """
+    if not config.get_settings().enable_error_simulation:
+        raise NotFound()
     raise RuntimeError("Simulated failure for alarm demonstration")
 
 
@@ -222,6 +257,44 @@ def _scan_upload() -> ScanOutcome:
     return ScanOutcome(result=result, record=record, scan_id=_save(record))
 
 
+def _result_page(result: Result, record: db.ScanRecord, scan_id: int | None) -> str:
+    """Render result.html, for a scan just made or for one read back from the history.
+
+    scan_id is None when a new scan could not be saved. Only a record read back from
+    the history has a created_at, and that is what tells the template which of the two
+    pages it is drawing.
+    """
+    return render_template(
+        "result.html",
+        result=result,
+        filename=record.filename,
+        sender=record.sender or "",
+        subject=record.subject or "",
+        served_by=record.served_by,
+        saved=scan_id is not None,
+        scan_id=scan_id,
+        scanned_at=record.created_at,
+    )
+
+
+def _stored_result(record: db.ScanRecord) -> Result:
+    """Rebuild the engine's Result from a stored scan, without running the engine again.
+
+    Score, verdict and decided_by are shown as they were stored: what the scan concluded
+    at the time, whatever the engine's rules have become since. The per-category subtotals
+    are the one part of a Result that is not stored. They are summed again from the stored
+    findings, each of which carries the weight it had when the scan was made; only the cap
+    on a category is today's.
+    """
+    return Result(
+        score=record.score,
+        verdict=record.verdict,
+        decided_by=record.decided_by,
+        findings=record.findings,
+        category_scores=score_categories(record.findings),
+    )
+
+
 def _save(record: db.ScanRecord) -> int | None:
     """Save the scan and return its id, or None if the database is unavailable.
 
@@ -259,6 +332,13 @@ def _finish_request_log(response: Response) -> Response:
         duration_ms=duration_ms,
         **g.get("log_fields", {}),
     )
+    return response
+
+
+def _add_security_headers(response: Response) -> Response:
+    """Add SECURITY_HEADERS to the response, keeping any it already sets itself."""
+    for name, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
     return response
 
 

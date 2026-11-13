@@ -1,4 +1,7 @@
 {#-
+  Draws two pages: the result of a scan just made (POST /scan), and the detail page of a
+  scan read back from the history (GET /scans/<id>). scanned_at tells them apart.
+
   Receives:
     result: Result         the engine's verdict, score, decided_by, findings and category_scores
     filename: str          as uploaded; attacker-controlled, like every string from the email
@@ -7,6 +10,7 @@
     served_by: str         identifier of the instance that ran the scan: its EC2 instance ID
     saved: bool            False when the scan could not be written to the history
     scan_id: int | None    the history id, None when not saved
+    scanned_at: datetime | None    when a stored scan was made, in UTC; None for a scan just made
 -#}
 {% extends "base.html" %}
 
@@ -38,6 +42,10 @@
   <dt>Scan</dt>
   <dd>#{{ scan_id }}</dd>
   {% endif %}
+  {% if scanned_at %}
+  <dt>Scanned at</dt>
+  <dd class="timestamp">{{ scanned_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC</dd>
+  {% endif %}
 </dl>
 
 <h2>Findings</h2>
@@ -61,5 +69,9 @@
 <p class="empty">No phishing indicators were found.</p>
 {% endfor %}
 
+{% if scanned_at %}
+<p class="next-action"><a href="{{ url_for('pages.history') }}">Back to history</a></p>
+{% else %}
 <p class="next-action"><a href="{{ url_for('pages.upload_form') }}">Scan another email</a></p>
+{% endif %}
 {% endblock %}

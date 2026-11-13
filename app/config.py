@@ -33,7 +33,14 @@ DEFAULTS = {
     "MAX_UPLOAD_BYTES": "5242880",  # 5 MiB
     # Which build of the code is running. On EC2 it is the hash of the release zip.
     "APP_RELEASE": "local",
+    # /simulate-error answers 404 unless this is "true". Off by default: anyone who can reach
+    # the route can fire the 5XX alarm. infra/app switches it on for the review's demo.
+    "ENABLE_ERROR_SIMULATION": "false",
 }
+
+# How an on/off setting is written. Anything else is refused at startup, so a typo such as
+# "ture" is an error rather than a silent "off".
+SWITCH_VALUES = {"true": True, "false": False}
 
 # The values libpq accepts for sslmode. A misspelt one is refused at startup, rather than
 # failing every connection later with an error that reads like a database problem.
@@ -47,7 +54,7 @@ SECRETS_READ_TIMEOUT_SECONDS = 5
 SECRETS_TOTAL_ATTEMPTS = 2
 
 # The key RDS stores the password under, in the secret it manages for the master user.
-SECRET_PASSWORD_KEY = "password"
+SECRET_PASSWORD_KEY = "password"  # nosec B105 # the name of a JSON key, not a password
 
 # arn:aws:secretsmanager:<region>:<account>:secret:<name>
 _ARN_PREFIX = "arn"
@@ -82,14 +89,16 @@ class Settings:
     # Which build is serving: release in /health and in every log line. During a
     # deployment it is what shows the new code taking over, instance by instance.
     release: str
+    # Whether /simulate-error raises its deliberate 500, or answers 404 as if absent.
+    enable_error_simulation: bool
 
 
 @functools.cache
 def get_settings() -> Settings:
     """Return the settings, read from the environment once and then cached.
 
-    Raises ConfigError when a numeric setting is not a whole number, or
-    DB_SSLMODE is not one of libpq's modes.
+    Raises ConfigError when a numeric setting is not a whole number, DB_SSLMODE
+    is not one of libpq's modes, or an on/off setting is neither true nor false.
     """
     environment = _environment()
     return Settings(
@@ -103,6 +112,7 @@ def get_settings() -> Settings:
         max_upload_bytes=_whole_number(environment, "MAX_UPLOAD_BYTES"),
         instance_id=environment.get("INSTANCE_ID") or HOSTNAME,
         release=environment["APP_RELEASE"],
+        enable_error_simulation=_switch(environment, "ENABLE_ERROR_SIMULATION"),
     )
 
 
@@ -162,6 +172,13 @@ def _ssl_mode(environment: dict[str, str]) -> str:
     if mode not in SSL_MODES:
         raise ConfigError(f"DB_SSLMODE must be one of {', '.join(SSL_MODES)}, not {mode!r}")
     return mode
+
+
+def _switch(environment: dict[str, str], name: str) -> bool:
+    value = environment[name]
+    if value.lower() not in SWITCH_VALUES:
+        raise ConfigError(f"{name} must be true or false, not {value!r}")
+    return SWITCH_VALUES[value.lower()]
 
 
 @functools.cache

@@ -1,5 +1,7 @@
 # Python
 .venv/
+# checkov's own environment, kept apart from the project's (docs/hardening-phase7-design.md)
+.venv-scan/
 __pycache__/
 *.pyc
 .env
@@ -14,6 +16,9 @@ crash.log
 # Build artifacts
 *.zip
 infra/app/.build/
+
+# Downloaded tool binaries, such as tools/gitleaks.exe
+tools/
 
 # OS
 Thumbs.db

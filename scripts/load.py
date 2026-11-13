@@ -5,7 +5,9 @@
 
 By default it posts the files in samples/ in rotation to /api/scan, then prints requests
 sent, a count per status and per served_by, and p50/p95 latency. With --errors it requests
-/simulate-error instead, a deliberate 500. In both modes requests are paced to stay under
+/simulate-error instead, a deliberate 500. The server answers that route only with error
+simulation switched on (ENABLE_ERROR_SIMULATION); a 404 is reported as the switch being off,
+with exit code 1, never as errors sent. In both modes requests are paced to stay under
 --rate requests a second, counted across all threads together (default 5).
 
 A demonstration tool, not a load test: a failed request is counted, never raised and never
@@ -37,6 +39,12 @@ DEFAULT_CONCURRENCY = 4
 DEFAULT_RATE = 5.0
 MILLISECONDS_PER_SECOND = 1000
 NO_SERVER = "(not reported)"
+# How the server answers /simulate-error with ENABLE_ERROR_SIMULATION off.
+SWITCHED_OFF_STATUS = "404"
+SWITCHED_OFF_MESSAGE = (
+    "error simulation is off on the server: /simulate-error answered 404, so no 5XX was "
+    "produced. Apply infra/app with enable_error_simulation = true."
+)
 
 type Sample = tuple[str, bytes]  # a file's name and content, as requests takes an upload
 
@@ -80,6 +88,9 @@ def main(arguments: list[str] | None = None) -> int:
     if options.errors:
         outcomes = send_errors(url, options)
         print("status codes:", " ".join(outcome.status for outcome in outcomes))
+        if any(outcome.status == SWITCHED_OFF_STATUS for outcome in outcomes):
+            print(SWITCHED_OFF_MESSAGE)
+            return 1
         return 0
     samples = read_samples(SAMPLES_DIRECTORY)
     if not samples:

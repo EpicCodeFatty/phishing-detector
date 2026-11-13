@@ -5,3 +5,7 @@
 -r app/requirements.txt
 pytest==9.2.0
 ruff==0.17.5
+# Security scanners: Python source and the pinned dependencies. checkov, the Terraform
+# scanner, has its own environment (.venv-scan), because its many pins would fight these.
+bandit==1.9.4
+pip-audit==2.10.1

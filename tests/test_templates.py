@@ -85,6 +85,7 @@ def test_every_page_template_documents_what_it_receives():
             "served_by",
             "saved",
             "scan_id",
+            "scanned_at",
         },
         "history.html": {"scans"},
         "error.html": {"status", "message"},
@@ -106,6 +107,22 @@ def test_routes_pass_each_template_exactly_its_contract(client, monkeypatch):
     client.get("/no-such-page")
 
     assert rendered == {name: contract_of(name) for name in PAGES}
+
+
+def test_scan_detail_page_passes_the_result_template_exactly_its_contract(client, monkeypatch):
+    rendered: dict[str, set[str]] = {}
+    original = web.render_template
+
+    def recording_render(name, **context):
+        rendered[name] = set(context)
+        return original(name, **context)
+
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+    monkeypatch.setattr(web, "render_template", recording_render)
+
+    client.get("/scans/1")
+
+    assert rendered == {"result.html": contract_of("result.html")}
 
 
 def test_history_page_contract_holds_when_the_database_is_down(client, monkeypatch):

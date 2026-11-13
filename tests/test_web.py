@@ -2,13 +2,15 @@
 
 import json
 import logging
+from pathlib import Path
 
 import psycopg
 import pytest
 import werkzeug.formparser
+from markupsafe import escape
 
 from app import config, db, web
-from tests.builders import eml, sample_upload, upload_of
+from tests.builders import browser_upload, eml, sample_upload, upload_of
 from tests.conftest import FakeHistory
 
 API_KEYS = {"score", "verdict", "decided_by", "findings", "served_by", "scan_id"}
@@ -25,6 +27,27 @@ STARTUP_FAILURE = "schema_init_failed"
 
 # Stands in for the database password wherever a test checks that it is never repeated.
 PASSWORD_MARKER = "s3cret-PASSWORD-marker-91f2"
+
+# What every response must carry, written out here rather than imported from web.py, so a
+# loosened policy fails a test instead of passing it.
+SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+}
+
+# Stored XSS: an email whose subject, sender display name, link text and link target carry
+# markup, uploaded under a filename that does too. Under tests/, not samples/: the samples
+# are a verdict corpus, and scripts/load.py uploads every one of them.
+XSS_FIXTURE = Path(__file__).parent / "fixtures" / "xss-subject.eml"
+HOSTILE_FILENAME = '"><img src=x onerror=alert(1)>.eml'
+# No tag may open on the page. "onerror=" itself is harmless once the "<img" before it is
+# escaped: it is then text, not an attribute, so it is not what these look for.
+RAW_MARKUP = ("<script", "<img")
+ESCAPED_MARKUP = ("&lt;script&gt;alert(1)&lt;/script&gt;", "&lt;img src=x onerror=alert(1)&gt;")
 
 
 def unavailable(*args, **kwargs):
@@ -197,11 +220,12 @@ def test_failed_connection_never_puts_the_password_in_a_log_line_or_a_page(
         ("post", "/scan", "paypal-phish.eml"),
         ("post", "/api/scan", "paypal-phish.eml"),
         ("get", "/history", None),
+        ("get", "/scans/1", None),
         ("get", "/no-such-page", None),
         ("get", "/simulate-error", None),
     ],
 )
-def test_no_response_reveals_the_hostname(ec2_client, method, path, upload):
+def test_no_response_reveals_the_hostname(error_simulation, ec2_client, method, path, upload):
     # On EC2 the hostname is derived from the private IP address: ip-10-0-21-44.
     ec2_client.post("/scan", data=sample_upload("team-lunch.eml"))
     data = sample_upload(upload) if upload else None
@@ -298,6 +322,136 @@ def test_history_returns_503_when_the_database_is_unavailable(client, monkeypatc
     assert "temporarily unavailable" in response.get_data(as_text=True)
 
 
+def test_history_links_each_file_name_to_its_scan(client):
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    page = client.get("/history").get_data(as_text=True)
+
+    assert '<a href="/scans/1">paypal-phish.eml</a>' in page
+
+
+def test_scan_detail_shows_the_stored_verdict_findings_and_instance(ec2_client, history):
+    ec2_client.post("/scan", data=sample_upload("paypal-phish.eml"))
+    (record,) = history.records
+
+    response = ec2_client.get("/scans/1")
+
+    page = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert "verdict-phishing" in page
+    assert f"Score {record.score}/100" in page
+    assert [
+        found.reason for found in record.findings if str(escape(found.reason)) not in page
+    ] == []
+    assert EC2_INSTANCE_ID in page
+
+
+def test_scan_detail_gives_the_findings_and_category_points_of_the_original_result(client):
+    # The category points are not stored: the detail page works them out again.
+    def findings_section(page: str) -> str:
+        return page[page.index("<h2>Findings</h2>") : page.index('<p class="next-action">')]
+
+    result_page = client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    detail_page = client.get("/scans/1")
+
+    original = findings_section(result_page.get_data(as_text=True))
+    assert "points" in original
+    assert findings_section(detail_page.get_data(as_text=True)) == original
+
+
+def test_scan_detail_says_when_it_was_scanned_and_leads_back_to_the_history(client, history):
+    client.post("/scan", data=sample_upload("team-lunch.eml"))
+    (record,) = history.records
+
+    page = client.get("/scans/1").get_data(as_text=True)
+
+    assert "Scanned at" in page
+    assert record.created_at.strftime("%Y-%m-%d %H:%M:%S") + " UTC" in page
+    assert '<a href="/history">Back to history</a>' in page
+    assert "Scan another email" not in page
+    assert SAVE_WARNING not in page
+
+
+def test_result_of_a_new_scan_offers_another_scan_and_no_scan_time(client):
+    response = client.post("/scan", data=sample_upload("team-lunch.eml"))
+
+    page = response.get_data(as_text=True)
+    assert "Scan another email" in page
+    assert "Scanned at" not in page
+    assert "Back to history" not in page
+
+
+@pytest.mark.parametrize("path", ["/scans/2", "/scans/abc", "/scans/-1", "/scans/1.5", "/scans/"])
+def test_scan_detail_of_an_unknown_or_malformed_id_is_a_404(client, path):
+    client.post("/scan", data=sample_upload("team-lunch.eml"))
+
+    response = client.get(path)
+
+    assert response.status_code == 404
+    assert "There is no page at this address." in response.get_data(as_text=True)
+
+
+def test_scan_detail_returns_503_when_the_database_is_unavailable(client, monkeypatch):
+    monkeypatch.setattr(db, "get_scan", unavailable)
+
+    response = client.get("/scans/1")
+
+    assert response.status_code == 503
+    assert "temporarily unavailable" in response.get_data(as_text=True)
+
+
+def test_unavailable_scan_detail_is_logged_as_an_error_with_its_type(client, monkeypatch, caplog):
+    monkeypatch.setattr(db, "get_scan", unavailable)
+
+    with caplog.at_level(logging.INFO):
+        client.get("/scans/1")
+
+    (failure,) = [
+        record for record in caplog.records if record.getMessage() == "scan_view_unavailable"
+    ]
+    assert failure.levelname == "ERROR"
+    assert failure.fields["error_type"] == "StorageError"
+
+
+def test_each_scan_view_is_logged_as_one_line_with_the_scan_id(client, caplog):
+    client.post("/scan", data=sample_upload("team-lunch.eml"))
+    caplog.clear()  # the upload's own line: only what the view logs is counted
+
+    with caplog.at_level(logging.INFO):
+        client.get("/scans/1")
+
+    (record,) = [record for record in caplog.records if hasattr(record, "fields")]
+    assert record.getMessage() == "scan_view"
+    assert (record.fields["scan_id"], record.fields["status"]) == (1, 200)
+
+
+def test_view_of_a_missing_scan_is_logged_with_the_id_that_was_asked_for(client, caplog):
+    with caplog.at_level(logging.INFO):
+        client.get("/scans/7")
+
+    (line,) = request_lines(caplog)
+    assert (line["scan_id"], line["status"]) == (7, 404)
+
+
+def test_hostile_email_is_shown_escaped_on_its_scan_detail_page(client):
+    client.post("/scan", **browser_upload(XSS_FIXTURE.read_bytes(), HOSTILE_FILENAME))
+
+    page = client.get("/scans/1").get_data(as_text=True)
+
+    assert [markup for markup in RAW_MARKUP if markup in page] == []
+    assert [markup for markup in ESCAPED_MARKUP if markup not in page] == []
+
+
+def test_scan_detail_carries_the_security_headers(client):
+    client.post("/scan", data=sample_upload("team-lunch.eml"))
+
+    response = client.get("/scans/1")
+
+    assert response.status_code == 200
+    assert {name: response.headers.get(name) for name in SECURITY_HEADERS} == SECURITY_HEADERS
+
+
 def test_api_scan_returns_the_expected_json_keys(client):
     response = client.post("/api/scan", data=sample_upload("paypal-phish.eml"))
 
@@ -357,7 +511,7 @@ def test_uploaded_file_is_never_written_to_disk(client, monkeypatch):
     assert response.status_code == 200
 
 
-def test_simulate_error_returns_a_generic_500(client):
+def test_simulate_error_returns_a_generic_500(error_simulation, client):
     response = client.get("/simulate-error")
 
     page = response.get_data(as_text=True)
@@ -368,7 +522,21 @@ def test_simulate_error_returns_a_generic_500(client):
     assert "RuntimeError" not in page
 
 
-def test_unexpected_error_is_logged_with_its_type_and_traceback(client, caplog):
+def test_simulate_error_is_a_plain_404_when_switched_off(client):
+    response = client.get("/simulate-error")
+
+    assert response.status_code == 404
+    assert "There is no page at this address." in response.get_data(as_text=True)
+
+
+def test_switched_off_simulation_raises_nothing(client, caplog):
+    with caplog.at_level(logging.INFO):
+        client.get("/simulate-error")
+
+    assert "unhandled_error" not in [record.getMessage() for record in caplog.records]
+
+
+def test_unexpected_error_is_logged_with_its_type_and_traceback(error_simulation, client, caplog):
     with caplog.at_level(logging.INFO):
         client.get("/simulate-error")
 
@@ -410,6 +578,57 @@ def test_content_from_the_email_is_escaped(client):
     assert "&lt;b&gt;name&lt;/b&gt;" in page
 
 
+@pytest.mark.parametrize("path", ["/", "/history", "/health", "/no-such-page"])
+def test_every_response_carries_the_security_headers(client, path):
+    response = client.get(path)
+
+    assert {name: response.headers.get(name) for name in SECURITY_HEADERS} == SECURITY_HEADERS
+
+
+def test_a_server_error_carries_the_security_headers(error_simulation, client):
+    response = client.get("/simulate-error")
+
+    assert response.status_code == 500
+    assert {name: response.headers.get(name) for name in SECURITY_HEADERS} == SECURITY_HEADERS
+
+
+def test_a_header_the_response_sets_itself_is_kept(app):
+    @app.get("/own-referrer-policy")
+    def own_referrer_policy():
+        return "", 200, {"Referrer-Policy": "same-origin"}
+
+    response = app.test_client().get("/own-referrer-policy")
+
+    assert response.headers["Referrer-Policy"] == "same-origin"
+    assert response.headers["X-Frame-Options"] == "DENY"
+
+
+def test_hostile_upload_keeps_its_filename_in_the_history(client, history: FakeHistory):
+    # What makes the two tests below meaningful: the hostile name reaches the page unaltered.
+    client.post("/scan", **browser_upload(XSS_FIXTURE.read_bytes(), HOSTILE_FILENAME))
+
+    (record,) = history.records
+    assert record.filename == HOSTILE_FILENAME
+    assert "<script>alert(1)</script>" in record.subject
+
+
+def test_hostile_email_is_shown_escaped_on_the_result_page(client):
+    response = client.post("/scan", **browser_upload(XSS_FIXTURE.read_bytes(), HOSTILE_FILENAME))
+
+    page = response.get_data(as_text=True)
+    assert [markup for markup in RAW_MARKUP if markup in page] == []
+    assert [markup for markup in ESCAPED_MARKUP if markup not in page] == []
+
+
+def test_hostile_email_is_shown_escaped_on_the_history_page(client):
+    client.post("/scan", **browser_upload(XSS_FIXTURE.read_bytes(), HOSTILE_FILENAME))
+
+    page = client.get("/history").get_data(as_text=True)
+
+    assert [markup for markup in RAW_MARKUP if markup in page] == []
+    assert [markup for markup in ESCAPED_MARKUP if markup not in page] == []
+
+
 def test_each_request_is_logged_as_one_line_with_its_outcome(client, caplog):
     with caplog.at_level(logging.INFO):
         client.post("/scan", data=sample_upload("paypal-phish.eml"))
@@ -433,7 +652,7 @@ def test_request_line_is_named_after_its_route(client, caplog):
     assert record.getMessage() == "scan"
 
 
-def test_server_error_request_line_is_logged_at_error_level(client, caplog):
+def test_server_error_request_line_is_logged_at_error_level(error_simulation, client, caplog):
     with caplog.at_level(logging.INFO):
         client.get("/simulate-error")
 

@@ -230,6 +230,15 @@ def test_errors_mode_requests_the_error_route_and_prints_each_status(monkeypatch
     assert capsys.readouterr().out == "status codes: 500 500 500\n"
 
 
+def test_errors_mode_says_when_the_server_has_error_simulation_off(monkeypatch, clock, capsys):
+    answer_with(monkeypatch, FakeResponse(404, None))
+
+    exit_code = load.main(["--url", URL, "--errors", "2"])
+
+    assert exit_code == 1
+    assert capsys.readouterr().out == ("status codes: 404 404\n" + load.SWITCHED_OFF_MESSAGE + "\n")
+
+
 def test_errors_mode_is_paced_too(sent, clock):
     load.main(["--url", URL, "--errors", "3", "--rate", "2"])
 

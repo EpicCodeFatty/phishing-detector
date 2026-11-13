@@ -34,7 +34,8 @@ py -3.12 -m venv .venv                  # python3.12 -m venv .venv on Linux and 
 pip install -r requirements-dev.txt
 ```
 
-`requirements-dev.txt` pins the development tools, `pytest` and `ruff`, and pulls in the runtime
+`requirements-dev.txt` pins the development tools, `pytest`, `ruff`, and the scanners `bandit` and
+`pip-audit`, and pulls in the runtime
 dependencies from `app/requirements.txt`, so that one command sets up everything.
 
 Analyse an email file:
@@ -90,11 +91,69 @@ TODO — failure scenarios, what you see, and what to check first.
 
 ## 7. Security
 
-TODO — scan findings, what was fixed, and what was accepted with a reason.
+Four scanners read the code: **checkov** (Terraform), **bandit** (Python), **pip-audit** (pinned
+dependencies) and **gitleaks** (every commit). The goal is not zero findings but zero *unexplained*
+ones: each is fixed, accepted with its reason written next to the code, or shown to be a false
+positive. The full list, with what each check means, the risk, and what production would do, is in
+[docs/security-scan.md](docs/security-scan.md).
+
+- **checkov:** 32 findings. 1 fixed (VPC flow logs), 30 accepted, 1 false positive. Most of the
+  accepted ones trace back to three decisions: no domain (so HTTP only), a stack destroyed daily
+  (so no deletion protection, short log retention), and a demo-sized database.
+- **bandit:** 2 low-severity false positives, both a variable name containing "password" or
+  "token". No SQL is built from strings: every statement takes its values as parameters.
+- **pip-audit:** no known vulnerabilities in the 28 pinned packages.
+- **gitleaks:** nothing in the 10 commits of history.
+
+Fixed in this pass:
+
+- **Security headers on every response:** a content security policy that allows only this
+  origin's own files, plus `nosniff`, `no-referrer` and `X-Frame-Options: DENY`. It is the second
+  layer behind template escaping: if hostile markup from an email ever got through, the browser
+  would still refuse to run it. No `Strict-Transport-Security`: browsers ignore it over plain HTTP.
+- **Stored XSS is tested, not assumed:** an email with script and image tags in its subject, sender,
+  links and filename is shown escaped on the result and history pages.
+- **Rejected traffic is logged:** a VPC flow log records every connection attempt the security
+  groups refuse. The saved query `phishing-detector/rejected-traffic` shows who is probing the load
+  balancer, and on which ports.
+- **`/simulate-error` is behind a switch:** see *Decisions*, below.
+- **A pre-push hook runs gitleaks** and blocks a push that contains a secret.
+
+The hook lives in the repository, but where Git looks for hooks is local configuration and is not
+cloned. Once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+It uses `gitleaks` from `PATH`, or `tools/gitleaks.exe`. Without either it warns and lets the push
+through.
+
+To run the scans again (checkov has its own virtualenv, so its many pins cannot change the
+project's):
+
+```powershell
+py -3.12 -m venv .venv-scan; .venv-scan\Scripts\pip install checkov==3.4.5
+.venv-scan\Scripts\checkov -d infra --framework terraform --compact --quiet
+bandit -r app scripts -q
+pip-audit -r app\requirements.txt
+gitleaks git . --redact --verbose
+```
 
 ## 8. Cleanup
 
 TODO — `terraform destroy` and how the teardown was verified.
+
+After `terraform destroy` in `infra/app`, these should all return empty lists. The log-group check
+covers the application, boot and VPC flow log groups (`/phishing-detector/app`, `/boot` and
+`/vpc-flow-rejects`), since all three share the prefix:
+
+```powershell
+aws resourcegroupstaggingapi get-resources --profile phishing --tag-filters Key=Stack,Values=app --query "ResourceTagMappingList[].ResourceARN"
+aws logs describe-log-groups --profile phishing --log-group-name-prefix /phishing-detector --query "logGroups[].logGroupName"
+aws cloudwatch describe-alarms --profile phishing --alarm-name-prefix phishing-detector --query "MetricAlarms[].AlarmName"
+aws s3 ls --profile phishing | Select-String phishing-detector
+```
 
 ---
 
@@ -123,8 +182,9 @@ before `app` and destroyed after it. With a team, both states would live in an S
 `terraform_remote_state` would read from there, with no other change.
 
 **EC2 instances in private subnets, egress through a NAT Gateway.**
-The instances have no public IP. Inbound traffic reaches them only from the load balancer's security
-group; everything else is denied at the subnet level, not just by a security group rule.
+The instances have no public IP and sit in private subnets with no route from the internet. The only
+inbound path is from the load balancer's security group, on port 8000. There are no network ACLs
+beyond the default.
 *Trade-off:* a NAT Gateway costs roughly $1.10/day. A single NAT (in one AZ) is used rather than one
 per AZ: if that AZ fails, the instance in the other AZ still serves traffic through the ALB but cannot
 reach S3, Secrets Manager or CloudWatch, and a replacement instance cannot boot. In production this
@@ -174,8 +234,9 @@ a Packer-built AMI (a build step out of proportion to the project).
 **No long-lived AWS credentials anywhere.**
 Local development uses `aws login`, which issues temporary credentials valid for 12 hours; no access
 keys exist on disk. EC2 instances receive credentials through an instance role over IMDSv2, which is
-required (not optional) on the launch template. Nothing in the repository contains a key, and
-`gitleaks` runs before every push.
+required (not optional) on the launch template. Nothing in the repository contains a key: `gitleaks`
+found nothing in the history, and a pre-push hook runs it again before every push, once it is turned
+on (see *Security*).
 
 **The database password is never written down.**
 RDS generates and rotates it (`manage_master_user_password = true`) and stores it in Secrets Manager.
@@ -199,6 +260,9 @@ anything changing in this repository.
 There is no domain for this exercise, so there is no ACM certificate to attach to the listener.
 *Trade-off:* traffic is unencrypted. With a domain, this would be a Route 53 record, an ACM
 certificate, and an HTTPS listener with a redirect from :80.
+
+**Scans are viewable by id without authentication** (`/scans/<id>`), which is no new exposure because
+`/history` already lists every scan publicly; a production deployment would require sign-in for both.
 
 ### Application
 
@@ -233,6 +297,14 @@ least Suspicious. Everything else accumulates toward thresholds of 30 and 60.
 domain alone would only reach "Suspicious", which is the wrong answer.
 *Trade-off:* the weights and the severity assignments are tuned by hand against the sample corpus
 rather than learned from data, which keeps them explainable.
+
+**`/simulate-error` exists for the demo, behind a switch.**
+The route answers with a deliberate 500, so that the 5XX alarm can be shown firing. Anyone who can
+reach it can fire that alarm, so it is off by default: unless `ENABLE_ERROR_SIMULATION` is `true`, it
+answers 404, exactly like an address that does not exist. `infra/app` switches it on for the review
+(`enable_error_simulation`, default `true`). A production deployment would not have the route at all.
+*Trade-off:* while the review stack runs, anyone can still fire the alarm; it is one variable to
+turn off.
 
 **The engine makes no network calls.**
 No reputation APIs, no remote suffix-list downloads. The analysis is deterministic and the demo does
@@ -304,5 +376,18 @@ made, and RDS for PostgreSQL 16 refuses unencrypted connections on its side as w
 does not do is check who is at the other end. The production step is `sslmode=verify-full` with the
 RDS certificate authority bundle shipped on the instance, so that the client also refuses a server
 that cannot prove it is the database.
+
+**Install dependencies by hash, not only by version.**
+`app/requirements.txt` pins every package, the dependencies' own dependencies included, so every
+instance installs the same versions. It does not pin the files: pip checks no hash, so a tampered
+file on the index would be installed at boot. The fix is a lock file with hashes
+(`pip-compile --generate-hashes`), installed with `--require-hashes`, or an image with the
+dependencies already in it.
+
+**Small changes to the database stack, left alone during the hardening pass.**
+`infra/base` was not modified in phase 7, because a change there can modify or restart RDS. Two
+cheap ones are worth making at the next planned apply: copying tags to snapshots, and setting
+`auto_minor_version_upgrade = true` explicitly so the scanner stops reporting a default it cannot
+see. Exporting the PostgreSQL log to CloudWatch would follow.
 
 TODO — the rest is written at the end, once the system is running.

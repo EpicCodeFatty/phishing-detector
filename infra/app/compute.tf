@@ -119,6 +119,9 @@ resource "aws_launch_template" "app" {
       # their resources' attributes, so the groups exist before this template does.
       cw_agent_config = local.cw_agent_config
       app_log_file    = local.app_log_file
+
+      # Rendered as "true" or "false", the two values the application accepts.
+      enable_error_simulation = var.enable_error_simulation
     }),
     "\r\n", "\n"
   ))

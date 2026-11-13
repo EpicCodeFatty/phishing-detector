@@ -221,6 +221,7 @@ def db_is_reachable() -> bool                     # for diagnostics only, never 
 | GET | `/` | Upload form |
 | POST | `/scan` | Analyze an uploaded file, save it, render the result |
 | GET | `/history` | The most recent scans |
+| GET | `/scans/<id>` | One stored scan in full; 404 for an unknown id |
 | POST | `/api/scan` | Same as `/scan`, returns JSON |
 | GET | `/health` | Load balancer health check |
 | GET | `/simulate-error` | Returns 500 on purpose |
@@ -377,12 +378,25 @@ page can be read without opening `web.py`:
 | Template | Receives |
 |---|---|
 | `upload.html` | `max_mb: int` |
-| `result.html` | `result: Result`, `filename: str`, `sender: str`, `subject: str`, `served_by: str`, `saved: bool`, `scan_id: int \| None` |
+| `result.html` | `result: Result`, `filename: str`, `sender: str`, `subject: str`, `served_by: str`, `saved: bool`, `scan_id: int \| None`, `scanned_at: datetime \| None` |
 | `history.html` | `scans: list[ScanRecord]` |
 | `error.html` | `status: int`, `message: str` |
 
 A redesign that keeps this contract is a pure markup change. Keep the table in this document in step
 with the code.
+
+**`result.html` draws two pages, and `scanned_at` tells them apart.** It is `None` for a scan just
+made (`POST /scan`), and the time the scan was made, in UTC, on the detail page of a stored scan
+(`GET /scans/<id>`). When it is set, the page shows "Scanned at" and ends with "Back to history"
+instead of "Scan another email". The detail page is built from the stored row, without running the
+engine again: the web layer rebuilds the `Result`, so the template receives the same variables either
+way and there is no second result template to keep in step.
+
+**Fonts, scripts and styles must be files under `static/`: nothing loaded from a CDN, no inline
+`<script>`, no `<style>` block, no `style=""` attribute.** Every response carries a content security
+policy that allows only this origin's own files (`default-src 'self'`, added in phase 7), so the
+browser refuses anything else, and a redesign that breaks this rule produces a page the browser
+silently declines to style or run.
 
 ### 7.3 Class names describe meaning, not appearance
 
@@ -404,9 +418,10 @@ a broken layout.
 
 - **`upload.html`** — a file input and a submit button. States the accepted formats and the size limit.
 - **`result.html`** — the verdict large and colour-coded, the score, `decided_by`, and the findings
-  grouped by category with severity shown. Each finding shows its reason and evidence.
+  grouped by category with severity shown. Each finding shows its reason and evidence. Also the
+  detail page of a stored scan, with the time it was scanned.
 - **`history.html`** — a table: time, filename, sender, verdict, score, and `served_by`. Most recent
-  first.
+  first. Each file name links to that scan's detail page.
 - **`error.html`** — a generic friendly error page. No stack traces.
 
 **Keep `served_by` visible on both the result and the history pages, through any redesign.** It looks

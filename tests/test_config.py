@@ -63,6 +63,7 @@ def test_defaults_suit_the_local_container(isolated_config):
         max_upload_bytes=5242880,
         instance_id=config.HOSTNAME,
         release="local",
+        enable_error_simulation=False,
     )
 
 
@@ -83,6 +84,25 @@ def test_unknown_ssl_mode_is_a_configuration_error(isolated_config, monkeypatch,
     monkeypatch.setenv("DB_SSLMODE", mode)
 
     with pytest.raises(config.ConfigError, match="DB_SSLMODE"):
+        config.get_settings()
+
+
+@pytest.mark.parametrize("value,expected", [("true", True), ("TRUE", True), ("false", False)])
+def test_error_simulation_switch_comes_from_the_environment(
+    isolated_config, monkeypatch, value, expected
+):
+    monkeypatch.setenv("ENABLE_ERROR_SIMULATION", value)
+
+    assert config.get_settings().enable_error_simulation is expected
+
+
+@pytest.mark.parametrize("value", ["yes", "1", "", "ture"])
+def test_error_simulation_switch_that_is_not_true_or_false_is_an_error(
+    isolated_config, monkeypatch, value
+):
+    monkeypatch.setenv("ENABLE_ERROR_SIMULATION", value)
+
+    with pytest.raises(config.ConfigError, match="ENABLE_ERROR_SIMULATION"):
         config.get_settings()
 
 

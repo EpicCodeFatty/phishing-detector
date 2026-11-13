@@ -1,0 +1,11 @@
+From: "<script>alert(1)</script> PayPal \"><img src=x onerror=alert(1)>" <service@paypa1-secure.example>
+To: dana@example.org
+Subject: <script>alert(1)</script> Account on hold "><img src=x onerror=alert(1)>
+Date: Thu, 12 Nov 2026 09:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+
+<html><body>
+<p>Your account is on hold.</p>
+<p><a href="http://paypa1-secure.example/login?next=&quot;&gt;&lt;img src=x onerror=alert(1)&gt;">&lt;script&gt;alert(1)&lt;/script&gt; www.paypal.com &quot;&gt;&lt;img src=x onerror=alert(1)&gt;</a></p>
+</body></html>

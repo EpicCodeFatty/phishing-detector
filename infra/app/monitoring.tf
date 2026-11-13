@@ -36,6 +36,7 @@ locals {
     aws_cloudwatch_query_definition.verdicts.name,
     aws_cloudwatch_query_definition.requests_by_instance.name,
     aws_cloudwatch_query_definition.slowest_requests.name,
+    aws_cloudwatch_query_definition.rejected_traffic.name,
   ]
 
   # The dashboard is a grid 24 columns wide: x and width are in columns, y and height in

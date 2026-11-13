@@ -28,6 +28,7 @@ CONFIG_VARIABLES = (
     "MAX_UPLOAD_BYTES",
     "INSTANCE_ID",
     "APP_RELEASE",
+    "ENABLE_ERROR_SIMULATION",
 )
 
 
@@ -51,6 +52,10 @@ class FakeHistory:
         """Return the stored records, most recent first."""
         return list(reversed(self.records))[:limit]
 
+    def get_scan(self, scan_id: int) -> ScanRecord | None:
+        """Return the stored record with this id, or None, as the database would."""
+        return next((record for record in self.records if record.id == scan_id), None)
+
 
 @pytest.fixture
 def isolated_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
@@ -68,6 +73,15 @@ def _forget_cached_configuration() -> None:
     config.get_settings.cache_clear()
     config.refresh_db_password()
     config._secrets_client.cache_clear()
+
+
+@pytest.fixture
+def error_simulation(isolated_config: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Switch /simulate-error on, as infra/app does for the demo. Off is the default."""
+    monkeypatch.setenv("ENABLE_ERROR_SIMULATION", "true")
+    # The route reads the settings on every request, so this works whether the application
+    # was created before this fixture ran or after it.
+    config.get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -89,6 +103,7 @@ def history(monkeypatch: pytest.MonkeyPatch) -> FakeHistory:
     monkeypatch.setattr(db, "init_schema", fake.init_schema)
     monkeypatch.setattr(db, "save_scan", fake.save_scan)
     monkeypatch.setattr(db, "recent_scans", fake.recent_scans)
+    monkeypatch.setattr(db, "get_scan", fake.get_scan)
     return fake
 
 

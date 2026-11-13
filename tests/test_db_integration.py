@@ -148,6 +148,35 @@ def test_saved_scan_reads_back_unchanged(database):
     )
 
 
+def test_a_scan_is_read_back_by_its_id_exactly_as_the_history_lists_it(database):
+    db.save_scan(record_for("team-lunch.eml"))
+    scan_id = db.save_scan(record_for("paypal-phish.eml"))
+    (listed,) = [scan for scan in db.recent_scans() if scan.id == scan_id]
+
+    stored = db.get_scan(scan_id)
+
+    assert stored == listed
+    assert stored.filename == "paypal-phish.eml"
+    assert stored.created_at is not None
+
+
+@pytest.mark.parametrize(
+    "scan_id",
+    [2, 0, -1, 2**31, 2**63, 10**30],
+    ids=["never saved", "zero", "negative", "beyond INTEGER", "beyond BIGINT", "huge"],
+)
+def test_an_id_with_no_scan_reads_as_none(database, scan_id):
+    # The web layer passes on whatever whole number is in the address, however large.
+    db.save_scan(record_for("team-lunch.eml"))
+
+    assert db.get_scan(scan_id) is None
+
+
+def test_first_read_by_id_creates_the_table(database):
+    assert db.get_scan(1) is None
+    assert table_exists()
+
+
 def test_timestamps_are_read_back_in_utc(database):
     db.save_scan(record_for("team-lunch.eml"))
 

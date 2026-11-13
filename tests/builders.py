@@ -10,6 +10,7 @@ from app.detector.models import Attachment, Finding, ParsedEmail
 EXECUTABLE_BYTES = b"MZ\x90\x00 inert test bytes"
 PDF_BYTES = b"%PDF-1.4 inert test bytes"
 SAMPLES = Path(__file__).parent.parent / "samples"
+MULTIPART_BOUNDARY = "test-boundary-7f3a"
 
 
 def make_email(**fields: object) -> ParsedEmail:
@@ -65,6 +66,23 @@ def codes_and_severities(findings: list[Finding]) -> list[tuple[str, str]]:
 def upload_of(content: bytes, filename: str) -> dict[str, tuple[io.BytesIO, str]]:
     """Return form data that uploads the given bytes, as a browser would."""
     return {"file": (io.BytesIO(content), filename)}
+
+
+def browser_upload(content: bytes, filename: str) -> dict[str, object]:
+    """Return test-client arguments that upload the bytes encoded exactly as a browser would.
+
+    For filenames upload_of() cannot carry. Werkzeug's own form encoder writes a double quote
+    in a filename unescaped, which ends the header's quoted value early, so the server sees
+    no filename at all. Browsers send it as %22, as the HTML standard says, and the server
+    decodes it back to a quote.
+    """
+    disposition = f'form-data; name="file"; filename="{filename.replace('"', "%22")}"'
+    head = f"--{MULTIPART_BOUNDARY}\r\nContent-Disposition: {disposition}\r\n\r\n"
+    tail = f"\r\n--{MULTIPART_BOUNDARY}--\r\n"
+    return {
+        "data": head.encode() + content + tail.encode(),
+        "content_type": f"multipart/form-data; boundary={MULTIPART_BOUNDARY}",
+    }
 
 
 def sample_upload(name: str) -> dict[str, tuple[io.BytesIO, str]]:
