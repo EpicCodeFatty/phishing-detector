@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import boto3
+from botocore.client import BaseClient
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 # Read only if it exists. It is a local convenience: the servers set the environment directly.
@@ -25,8 +27,24 @@ DEFAULTS = {
     "DB_PORT": "5432",
     "DB_NAME": "phishing",
     "DB_USER": "phishing",
+    # The local container has no certificate, so encryption is used only if offered. On EC2
+    # user_data sets "require": the connection to RDS is encrypted or it is not made.
+    "DB_SSLMODE": "prefer",
     "MAX_UPLOAD_BYTES": "5242880",  # 5 MiB
+    # Which build of the code is running. On EC2 it is the hash of the release zip.
+    "APP_RELEASE": "local",
 }
+
+# The values libpq accepts for sslmode. A misspelt one is refused at startup, rather than
+# failing every connection later with an error that reads like a database problem.
+SSL_MODES = ("disable", "allow", "prefer", "require", "verify-ca", "verify-full")
+
+# Limits for the Secrets Manager call. botocore's defaults wait a minute per attempt, far
+# longer than the 30 seconds after which gunicorn kills a silent worker; with these, an
+# unreachable AWS API costs a worker at most (3 + 5) seconds twice, and one error line.
+SECRETS_CONNECT_TIMEOUT_SECONDS = 3
+SECRETS_READ_TIMEOUT_SECONDS = 5
+SECRETS_TOTAL_ATTEMPTS = 2
 
 # The key RDS stores the password under, in the secret it manages for the master user.
 SECRET_PASSWORD_KEY = "password"
@@ -53,6 +71,7 @@ class Settings:
     db_port: int
     db_name: str
     db_user: str
+    db_sslmode: str  # libpq's sslmode: one of SSL_MODES
     db_secret_arn: str  # '' when the password comes from DB_PASSWORD
     log_file: str  # '' means log to stdout
     max_upload_bytes: int
@@ -60,13 +79,17 @@ class Settings:
     # The EC2 instance ID on a server, which user_data reads from IMDSv2 at boot; the
     # hostname locally.
     instance_id: str
+    # Which build is serving: release in /health and in every log line. During a
+    # deployment it is what shows the new code taking over, instance by instance.
+    release: str
 
 
 @functools.cache
 def get_settings() -> Settings:
     """Return the settings, read from the environment once and then cached.
 
-    Raises ConfigError when a numeric setting is not a whole number.
+    Raises ConfigError when a numeric setting is not a whole number, or
+    DB_SSLMODE is not one of libpq's modes.
     """
     environment = _environment()
     return Settings(
@@ -74,10 +97,12 @@ def get_settings() -> Settings:
         db_port=_whole_number(environment, "DB_PORT"),
         db_name=environment["DB_NAME"],
         db_user=environment["DB_USER"],
+        db_sslmode=_ssl_mode(environment),
         db_secret_arn=environment.get("DB_SECRET_ARN", ""),
         log_file=environment.get("LOG_FILE", ""),
         max_upload_bytes=_whole_number(environment, "MAX_UPLOAD_BYTES"),
         instance_id=environment.get("INSTANCE_ID") or HOSTNAME,
+        release=environment["APP_RELEASE"],
     )
 
 
@@ -132,9 +157,32 @@ def _whole_number(environment: dict[str, str], name: str) -> int:
         raise ConfigError(f"{name} must be a whole number, not {value!r}") from None
 
 
+def _ssl_mode(environment: dict[str, str]) -> str:
+    mode = environment["DB_SSLMODE"]
+    if mode not in SSL_MODES:
+        raise ConfigError(f"DB_SSLMODE must be one of {', '.join(SSL_MODES)}, not {mode!r}")
+    return mode
+
+
+@functools.cache
+def _secrets_client(region: str) -> BaseClient:
+    """Return the Secrets Manager client for a region, created once per process.
+
+    Creating a client loads the service's model from disk, which is too slow to
+    repeat for every fetch, and the client is safe to share between threads.
+    """
+    limits = Config(
+        connect_timeout=SECRETS_CONNECT_TIMEOUT_SECONDS,
+        read_timeout=SECRETS_READ_TIMEOUT_SECONDS,
+        # Counts the first attempt too, unlike max_attempts, which counts retries after it.
+        retries={"total_max_attempts": SECRETS_TOTAL_ATTEMPTS},
+    )
+    return boto3.client("secretsmanager", region_name=region, config=limits)
+
+
 def _fetch_secret_password(secret_arn: str) -> str:
     """Read the password from the RDS-managed secret, a JSON object with a password key."""
-    client = boto3.client("secretsmanager", region_name=_region_of(secret_arn))
+    client = _secrets_client(_region_of(secret_arn))
     try:
         secret = client.get_secret_value(SecretId=secret_arn)["SecretString"]
     except (BotoCoreError, ClientError) as error:

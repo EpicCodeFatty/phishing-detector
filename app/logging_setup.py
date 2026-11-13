@@ -1,11 +1,12 @@
 """Structured logging: one JSON object per line.
 
-Every line carries ts, level, host and event, so CloudWatch Logs Insights can
-filter and count by field instead of parsing text. Extra fields are attached
-with log_event().
+Every line carries ts, level, host, release and event, so CloudWatch Logs
+Insights can filter and count by field instead of parsing text. Extra fields
+are attached with log_event().
 
 host is the instance identifier: the same value users see as served_by, and
-the name of the CloudWatch log stream the line lands in.
+the name of the CloudWatch log stream the line lands in. release is the build
+of the code that wrote the line, the same value /health reports.
 
 Never pass the email body, an attachment or the database password as a field.
 """
@@ -31,14 +32,15 @@ _QUIET_LOGGERS = ("werkzeug",)
 
 
 class JsonFormatter(logging.Formatter):
-    """Format each record as a single line of JSON, stamped with the instance identifier."""
+    """Format each record as a single line of JSON, stamped with the instance and the release."""
 
-    def __init__(self, instance_id: str) -> None:
+    def __init__(self, instance_id: str, release: str) -> None:
         super().__init__()
         self.instance_id = instance_id
+        self.release = release
 
     def format(self, record: logging.LogRecord) -> str:
-        """Return the record as JSON: ts, level, host, event, then the record's fields.
+        """Return the record as JSON: ts, level, host, release, event, then the record's fields.
 
         A record logged with an exception also gets error_type, error_message and
         traceback, unless its fields already name the error.
@@ -47,6 +49,7 @@ class JsonFormatter(logging.Formatter):
             "ts": datetime.fromtimestamp(record.created, UTC).strftime(_TIMESTAMP_FORMAT),
             "level": record.levelname,
             "host": self.instance_id,
+            "release": self.release,
             "event": record.getMessage(),
         }
         fields: dict[str, object] = getattr(record, _FIELDS_ATTRIBUTE, {})
@@ -60,16 +63,16 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(required | extra, default=str)
 
 
-def configure_logging(log_file: str, instance_id: str) -> None:
+def configure_logging(log_file: str, instance_id: str, release: str) -> None:
     """Send every log line, as JSON, to log_file, or to stdout when log_file is ''.
 
-    Each line's host field is instance_id. Safe to call more than once: the
-    handler from an earlier call is replaced. Raises OSError when the log file
-    cannot be opened, which is meant to stop the application from starting with
-    nowhere to log.
+    Each line's host field is instance_id and its release field is release.
+    Safe to call more than once: the handler from an earlier call is replaced.
+    Raises OSError when the log file cannot be opened, which is meant to stop
+    the application from starting with nowhere to log.
     """
     handler = _handler_for(log_file)
-    handler.setFormatter(JsonFormatter(instance_id))
+    handler.setFormatter(JsonFormatter(instance_id, release))
     setattr(handler, _OWN_HANDLER_MARK, True)
 
     root = logging.getLogger()

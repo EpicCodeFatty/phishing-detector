@@ -62,9 +62,20 @@ One module reads everything from environment variables. No module anywhere else 
 | `DB_USER` | `phishing` | the RDS master user |
 | `DB_PASSWORD` | from `.env` | **not set** |
 | `DB_SECRET_ARN` | not set | the Secrets Manager ARN |
+| `DB_SSLMODE` | not set (`prefer`) | `require` |
 | `LOG_FILE` | not set (logs to stdout) | `/var/log/phishing-app/app.log` |
 | `MAX_UPLOAD_BYTES` | `5242880` | `5242880` |
 | `INSTANCE_ID` | not set (the hostname is used) | the EC2 instance ID, e.g. `i-0123456789abcdef0` |
+| `APP_RELEASE` | not set (`local`) | the release ID, e.g. `3f9a1c2b7d10` |
+
+`APP_RELEASE` names the build of the code that is running: the first 12 hex characters of the release
+zip's hash, written into the environment file by `user_data`. It is reported as `release` in `/health`
+and in every log line, which is how a deployment is shown to be working: during an instance refresh,
+repeated requests show the old release, then a mix, then only the new one.
+
+`DB_SSLMODE` is passed to the driver as `sslmode`. Locally it is `prefer`, because the container has no
+certificate. On EC2 it is `require`: the connection to RDS is encrypted or it is not made. A value that
+is not one of libpq's modes is a configuration error at startup.
 
 `INSTANCE_ID` identifies the instance everywhere: as `served_by`, as `host` in `/health`, and as `host`
 in every log line.
@@ -164,8 +175,10 @@ first one's table is still uncommitted, miss it, and fail creating it again. Rac
 over twenty rounds, the session-lock version failed in every round and the transaction-scoped one in
 none; `test_instances_starting_at_once_all_initialise_the_schema` keeps it that way.
 
-The schema is created lazily, on a process's first database call, not at startup. An instance must
-start, and answer `/health`, while the database is unreachable.
+Startup tries `init_schema()` once, and must survive it failing: an instance has to start, and answer
+`/health`, while the database is unreachable. A failure is logged as an `ERROR` with the event
+`schema_init_failed` and nothing more. The schema is then created lazily, on the process's first
+database call that gets through; a module-level flag records that it is there.
 
 ### Connections
 
@@ -233,7 +246,8 @@ The quotes around `'app.web:create_app()'` matter: without them the shell reads 
 @pages.get("/health")
 def health():
     """Liveness only. Deliberately does not touch the database."""
-    return {"status": "ok", "host": config.get_settings().instance_id}, 200
+    settings = config.get_settings()
+    return {"status": "ok", "host": settings.instance_id, "release": settings.release}, 200
 ```
 
 This is the most consequential decision in the file, and it will be asked about.
@@ -304,12 +318,14 @@ These are checked in phase 7, so build them in now:
 One JSON object per line, so that CloudWatch Logs Insights can filter by field rather than parse text.
 
 ```json
-{"ts":"2026-11-12T18:04:11Z","level":"INFO","host":"i-0123456789abcdef0","event":"scan",
- "path":"/scan","status":200,"duration_ms":38,"verdict":"Phishing","score":100,
- "filename":"invoice.eml"}
+{"ts":"2026-11-12T18:04:11Z","level":"INFO","host":"i-0123456789abcdef0",
+ "release":"3f9a1c2b7d10","event":"scan","path":"/scan","status":200,"duration_ms":38,
+ "verdict":"Phishing","score":100,"filename":"invoice.eml"}
 ```
 
-- Required on every line: `ts`, `level`, `host`, `event`.
+- Required on every line: `ts`, `level`, `host`, `release`, `event`.
+- `release` is the build of the code that wrote the line, from `APP_RELEASE` (section 3): the same value
+  `/health` reports.
 - `host` is the instance identifier from `INSTANCE_ID` (section 3): the EC2 instance ID on a server,
   the hostname locally. It is the same value users see as `served_by` and that `/health` reports as
   `host`, so a scan in the history page leads straight to the log lines of the instance that ran it.
@@ -318,6 +334,8 @@ One JSON object per line, so that CloudWatch Logs Insights can filter by field r
 - One line per request, emitted after the response, including `path`, `status` and `duration_ms`.
 - Errors add `error_type` and `error_message`; an unexpected error, the kind that becomes a 500, also
   adds its `traceback`. **Never log the email body, an attachment, or the database password.**
+  A database error's message is the driver's own text, on one line and cut to 300 characters, with the
+  password blanked out of it should a driver ever quote one.
 - `LOG_FILE` unset means log to stdout, which is what you want locally. Set, it means log to that file,
   which is what the CloudWatch agent reads on the instance.
 

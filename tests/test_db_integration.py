@@ -8,6 +8,7 @@ phishing_test, so the development history in the phishing database is untouched.
 """
 
 import threading
+import traceback
 from datetime import UTC
 
 import psycopg
@@ -208,3 +209,28 @@ def test_wrong_password_is_a_storage_error(database, monkeypatch):
 
     with pytest.raises(db.StorageError):
         db.recent_scans()
+
+
+def test_rejected_password_is_not_quoted_in_the_error(database, monkeypatch):
+    # The real driver and a real refusal: what db.py logs must not repeat the password.
+    wrong_password = "wrong-PASSWORD-marker-5c07"
+    monkeypatch.setenv("DB_PASSWORD", wrong_password)
+
+    with pytest.raises(db.StorageError, match="authentication failed") as raised:
+        db.recent_scans()
+
+    assert wrong_password not in "".join(traceback.format_exception(raised.value))
+
+
+def test_require_refuses_a_server_without_tls(database, monkeypatch):
+    # The local container has no certificate, which makes it the server that "require"
+    # exists to refuse. On EC2 this is the setting: encrypted, or no connection at all.
+    monkeypatch.setenv("DB_SSLMODE", "require")
+
+    with pytest.raises(db.StorageError, match="SSL"):
+        db.recent_scans()
+
+
+def test_default_ssl_mode_connects_to_a_server_without_tls(database):
+    assert config.get_settings().db_sslmode == "prefer"
+    assert db.db_is_reachable() is True

@@ -96,9 +96,11 @@ def create_app() -> Flask:
 
     Raises ConfigError when the configuration is malformed, and OSError when the
     log file cannot be opened: either should stop the process from starting.
+    An unreachable database does not: see _initialise_schema().
     """
     settings = config.get_settings()
-    configure_logging(settings.log_file, settings.instance_id)
+    configure_logging(settings.log_file, settings.instance_id, settings.release)
+    _initialise_schema()
 
     app = Flask(__name__)
     app.request_class = InMemoryRequest
@@ -169,15 +171,32 @@ def health() -> tuple[dict[str, str], int]:
     problem is visible on the 5XX alarm and the RDS metrics instead.
 
     host is the instance identifier, never the hostname, which on EC2 contains
-    the private IP address.
+    the private IP address. release is the build of the code that answered:
+    during a deployment, repeated requests show the old release, then a mix,
+    then only the new one.
     """
-    return {"status": "ok", "host": config.get_settings().instance_id}, 200
+    settings = config.get_settings()
+    return {"status": "ok", "host": settings.instance_id, "release": settings.release}, 200
 
 
 @pages.get("/simulate-error")
 def simulate_error() -> Response:
     """Deliberate 500, used to demonstrate the 5XX alarm during the review."""
     raise RuntimeError("Simulated failure for alarm demonstration")
+
+
+def _initialise_schema() -> None:
+    """Create the scans table now if the database can be reached; if not, say so and carry on.
+
+    Startup must survive a database outage. If this raised, gunicorn's workers
+    would fail to start, /health would never answer, and the Auto Scaling Group
+    would replace instances in a loop: exactly what the shallow health check
+    exists to prevent. db creates the schema on its first successful call instead.
+    """
+    try:
+        db.init_schema()
+    except db.StorageError as error:
+        log_event(logger, logging.ERROR, "schema_init_failed", **error_fields(error))
 
 
 def _scan_upload() -> ScanOutcome:

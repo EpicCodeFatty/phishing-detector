@@ -17,6 +17,15 @@ SAVE_WARNING = "could not be saved"
 # What user_data sets INSTANCE_ID to on EC2, read from IMDSv2 at boot.
 EC2_INSTANCE_ID = "i-0123456789abcdef0"
 
+# What user_data sets APP_RELEASE to on EC2: the first 12 hex characters of the zip's hash.
+RELEASE = "3f9a1c2b7d10"
+
+# The event logged when the schema could not be created at startup.
+STARTUP_FAILURE = "schema_init_failed"
+
+# Stands in for the database password wherever a test checks that it is never repeated.
+PASSWORD_MARKER = "s3cret-PASSWORD-marker-91f2"
+
 
 def unavailable(*args, **kwargs):
     raise db.StorageError("OperationalError: connection refused")
@@ -24,8 +33,9 @@ def unavailable(*args, **kwargs):
 
 @pytest.fixture
 def ec2_client(isolated_config, history, monkeypatch):
-    """A client for the application configured as on EC2, with INSTANCE_ID set."""
+    """A client for the application configured as on EC2: INSTANCE_ID and APP_RELEASE set."""
     monkeypatch.setenv("INSTANCE_ID", EC2_INSTANCE_ID)
+    monkeypatch.setenv("APP_RELEASE", RELEASE)
     return _client()
 
 
@@ -104,7 +114,79 @@ def test_health_returns_200_with_the_instance_id(ec2_client):
     response = ec2_client.get("/health")
 
     assert response.status_code == 200
-    assert response.get_json() == {"status": "ok", "host": EC2_INSTANCE_ID}
+    assert response.get_json() == {"status": "ok", "host": EC2_INSTANCE_ID, "release": RELEASE}
+
+
+def test_health_reports_a_local_release_when_none_is_set(client):
+    response = client.get("/health")
+
+    assert response.get_json()["release"] == "local"
+
+
+@pytest.mark.parametrize(
+    "outage",
+    [
+        psycopg.OperationalError("connection refused"),
+        psycopg.errors.ConnectionTimeout("connection timeout expired"),
+        config.ConfigError("Cannot read the database secret: ConnectTimeoutError"),
+    ],
+    ids=["database refuses", "database times out", "secret unreadable"],
+)
+def test_application_starts_and_answers_health_while_the_database_is_down(
+    isolated_config, monkeypatch, caplog, outage
+):
+    # If startup needed the database, an outage would stop gunicorn's workers from
+    # starting, /health would never answer, and the group would replace instances in a loop.
+    def down(*args, **kwargs):
+        raise outage
+
+    monkeypatch.setenv("DB_PASSWORD", PASSWORD_MARKER)
+    monkeypatch.setattr(db, "_open", down)
+
+    with caplog.at_level(logging.INFO):
+        response = _client().get("/health")
+
+    (failure,) = [record for record in caplog.records if record.getMessage() == STARTUP_FAILURE]
+    assert response.status_code == 200
+    assert failure.levelname == "ERROR"
+    assert failure.fields["error_type"] == "StorageError"
+
+
+def test_successful_start_logs_no_schema_failure(client, caplog):
+    with caplog.at_level(logging.INFO):
+        client.get("/health")
+
+    assert STARTUP_FAILURE not in [record.getMessage() for record in caplog.records]
+
+
+def test_failed_connection_never_puts_the_password_in_a_log_line_or_a_page(
+    isolated_config, restore_root_logger, monkeypatch, tmp_path
+):
+    # The whole path, from the driver's error to the log file and the page, with a driver
+    # that quotes its connection string. Covers startup, a scan and the history page.
+    log_file = tmp_path / "app.log"
+    monkeypatch.setenv("LOG_FILE", str(log_file))
+    monkeypatch.setenv("DB_PASSWORD", PASSWORD_MARKER)
+
+    def refuse(**parameters):
+        raise psycopg.OperationalError(f"connection failed: password={parameters['password']}")
+
+    monkeypatch.setattr(psycopg, "connect", refuse)
+    client = _client()
+
+    pages = [
+        client.post("/scan", data=sample_upload("paypal-phish.eml")),
+        client.post("/api/scan", data=sample_upload("paypal-phish.eml")),
+        client.get("/history"),
+    ]
+
+    logged = log_file.read_text(encoding="utf-8")
+    assert {"schema_init_failed", "save_failed", "history_unavailable"} <= {
+        json.loads(line)["event"] for line in logged.splitlines()
+    }
+    assert "connection failed" in logged
+    assert PASSWORD_MARKER not in logged
+    assert all(PASSWORD_MARKER not in page.get_data(as_text=True) for page in pages)
 
 
 @pytest.mark.parametrize(
@@ -372,6 +454,20 @@ def test_log_lines_carry_the_instance_id_not_the_hostname(
     lines = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
     assert {line["host"] for line in lines} == {EC2_INSTANCE_ID}
     assert config.HOSTNAME not in log_file.read_text(encoding="utf-8")
+
+
+def test_log_lines_carry_the_release(
+    isolated_config, history, restore_root_logger, monkeypatch, tmp_path
+):
+    log_file = tmp_path / "app.log"
+    monkeypatch.setenv("APP_RELEASE", RELEASE)
+    monkeypatch.setenv("LOG_FILE", str(log_file))
+
+    _client().post("/scan", data=sample_upload("team-lunch.eml"))
+
+    lines = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+    assert lines
+    assert {line["release"] for line in lines} == {RELEASE}
 
 
 def test_email_content_never_reaches_the_log(client, caplog):

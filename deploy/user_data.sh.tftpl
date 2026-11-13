@@ -1,16 +1,21 @@
 #!/bin/bash
 set -euxo pipefail
 
-# Boot script for the application instances, phase 4: a placeholder HTTP server that answers
-# every request with the instance's own ID. Phase 5 replaces the middle of this script.
+# Boot script for the application instances: download the release, install it into a
+# virtualenv, and run it under gunicorn as an unprivileged systemd service.
+# Release: ${release}
 #
 # Every line of this script, and its output, lands in /var/log/cloud-init-output.log, the
 # first place to look if an instance never becomes healthy. set -x prints each command;
 # set -e stops at the first failure rather than carrying on with a half-built instance.
 #
-# Terraform renders this file with templatefile(), which claims a dollar sign or a percent
-# sign followed by an opening brace as its own syntax. Write either with the sign doubled,
-# or the apply fails. Plain $VAR and $(command) are left alone.
+# Terraform renders this file with templatefile() before the instance exists. A dollar sign
+# followed by a name in braces, like the release above, is a template variable that
+# Terraform fills in. Shell variables are written without braces, so the template leaves
+# them alone; one that needs braces must have its dollar sign doubled, or the apply fails.
+#
+# Nothing here may echo, cat or log the environment file or the database secret. set -x
+# prints commands, not heredoc bodies, so the file's contents stay out of the boot log.
 
 # retry <attempts> <command...>, for the steps that depend on the network. A boot script
 # runs exactly once, so without this a transient failure is permanent. The failure message
@@ -43,51 +48,82 @@ imds() {
 INSTANCE_ID=$(retry 5 imds instance-id)
 test -n "$INSTANCE_ID"
 
-retry 12 dnf install -y python3.12
+# pip is a separate package on Amazon Linux. Without it the virtualenv can be created
+# without pip, and the install fails on a missing file rather than a network error.
+retry 12 dnf install -y python3.12 python3.12-pip
 
 # The service runs as its own unprivileged user. Port 8000 needs no privilege, and if the
 # application is ever compromised, it is as a user that owns nothing.
-useradd --system --no-create-home --shell /sbin/nologin phishing
+id phishing >/dev/null 2>&1 || useradd --system --no-create-home --shell /sbin/nologin phishing
 
-# Quoted heredoc: the shell expands nothing inside it.
-# The server binds 0.0.0.0, not 127.0.0.1. Listening on the loopback address only, it would
-# answer itself and nothing else, and the load balancer's health check would fail.
-mkdir -p /opt/app
-cat > /opt/app/hello.py <<'PYEOF'
-import os
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+# --- fetch and unpack the release -------------------------------------------------------
+APP_ROOT=/opt/phishing
+RELEASE_ZIP=/root/release.zip
 
-INSTANCE = os.environ.get("INSTANCE_ID", "unknown")
+# Retried because the instance's credentials can lag a few seconds behind its launch: the
+# first attempt may fail with "Unable to locate credentials". A 403 here means either the
+# role's policy or a missing object; without s3:ListBucket, S3 never answers 404.
+retry 6 aws s3 cp --region "${region}" \
+  "s3://${artifact_bucket}/${artifact_key}" "$RELEASE_ZIP"
 
+# The zip holds the contents of app/ at its root. Extracting into a directory named app
+# restores the package name, so that app.web can be imported from APP_ROOT. Python's own
+# zipfile does the extracting: one fewer package to install and to assume about the image.
+mkdir -p "$APP_ROOT/app"
+python3.12 -m zipfile -e "$RELEASE_ZIP" "$APP_ROOT/app"
+rm -f "$RELEASE_ZIP"
 
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        body = f"hello from {INSTANCE}\n".encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+python3.12 -m venv "$APP_ROOT/venv"
+retry 5 "$APP_ROOT/venv/bin/pip" install --no-cache-dir --disable-pip-version-check \
+  -r "$APP_ROOT/app/requirements.txt"
 
-    def log_message(self, *args):
-        pass
+# Compile now, as root: the service user cannot write .pyc files, and a syntax error should
+# stop the boot here rather than crash gunicorn later.
+"$APP_ROOT/venv/bin/python" -m compileall -q "$APP_ROOT/app"
 
+# The code is owned by root and read-only to the service user.
+chown -R root:root "$APP_ROOT"
+chmod -R u=rwX,go=rX "$APP_ROOT"
 
-ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
-PYEOF
-
-# Unquoted heredoc, on purpose: the one place a shell variable must be expanded.
+# --- configuration ----------------------------------------------------------------------
+# Unquoted heredoc, on purpose: Terraform has already filled in the template variables, and
+# the shell fills in the instance ID now. The file holds the secret's ARN, never the
+# password. systemd reads it as root before dropping to the service user, so the
+# application never needs to read the file itself, and 0600 is enough.
 cat > /etc/phishing-app.env <<ENVEOF
 INSTANCE_ID=$INSTANCE_ID
+APP_RELEASE=${release}
+AWS_DEFAULT_REGION=${region}
+DB_HOST=${db_host}
+DB_PORT=${db_port}
+DB_NAME=${db_name}
+DB_USER=${db_user}
+DB_SECRET_ARN=${db_secret_arn}
+DB_SSLMODE=require
+LOG_FILE=/var/log/phishing-app/app.log
+TLDEXTRACT_CACHE=/var/cache/phishing-app/tldextract
 ENVEOF
-chmod 0640 /etc/phishing-app.env
+chmod 0600 /etc/phishing-app.env
 
+# Quoted heredoc: nothing in the unit file is expanded.
+#
+# --chdir puts /opt/phishing on sys.path, which is how app.web is found.
+# --no-control-socket: gunicorn would otherwise try to create a control socket under the
+#   service user's home directory, which does not exist, and warn about it at every start.
+# LogsDirectory makes systemd create /var/log/phishing-app, owned by the service user,
+#   before every start. Without it the application cannot create its log file.
+# CacheDirectory does the same for /var/cache/phishing-app, where TLDEXTRACT_CACHE in the
+#   environment file points. The engine's domain parser caches its bundled suffix list on
+#   disk, by default under a home directory this user does not have; it would carry on
+#   without, but log a warning about refreshing the list over HTTP, which it never does.
+# ProtectSystem=full makes /usr, /boot and /etc read-only for the service. The application
+#   writes only to its log directory and keeps uploads in memory.
 # StartLimitIntervalSec=0 with RestartSec=3: by default systemd stops restarting a unit that
-# fails five times in ten seconds and leaves it dead. For a service whose only supervisor is
-# systemd, giving up is the wrong behaviour.
+#   fails five times in ten seconds and leaves it dead. For a service whose only supervisor
+#   is systemd, giving up is the wrong behaviour.
 cat > /etc/systemd/system/phishing-app.service <<'SVCEOF'
 [Unit]
-Description=Phishing detector (placeholder)
+Description=Phishing detector
 Wants=network-online.target
 After=network-online.target
 StartLimitIntervalSec=0
@@ -95,12 +131,17 @@ StartLimitIntervalSec=0
 [Service]
 User=phishing
 Group=phishing
+WorkingDirectory=/opt/phishing
 EnvironmentFile=/etc/phishing-app.env
-ExecStart=/usr/bin/python3.12 /opt/app/hello.py
+ExecStart=/opt/phishing/venv/bin/gunicorn --chdir /opt/phishing --workers 2 --bind 0.0.0.0:8000 --timeout 30 --graceful-timeout 20 --no-control-socket 'app.web:create_app()'
 Restart=always
 RestartSec=3
+LogsDirectory=phishing-app
+CacheDirectory=phishing-app
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectSystem=full
+ProtectHome=tmpfs
 
 [Install]
 WantedBy=multi-user.target
@@ -110,6 +151,7 @@ systemctl daemon-reload
 systemctl enable --now phishing-app
 
 # A self-test and a marker. If the last line is absent from the log, the script died
-# earlier, and set -x shows where.
-retry 10 curl -sf http://127.0.0.1:8000/health
-echo "user_data finished OK"
+# earlier, and set -x shows where. More attempts than the placeholder needed: gunicorn
+# imports Flask, boto3 and the engine before it answers.
+retry 12 curl -sf http://127.0.0.1:8000/health
+echo "user_data finished OK (release ${release})"

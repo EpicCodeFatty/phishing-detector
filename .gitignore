@@ -13,6 +13,7 @@ crash.log
 
 # Build artifacts
 *.zip
+infra/app/.build/
 
 # OS
 Thumbs.db

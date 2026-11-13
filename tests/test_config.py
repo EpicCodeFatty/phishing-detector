@@ -6,6 +6,7 @@ from pathlib import Path
 
 import boto3
 import pytest
+from botocore.config import Config
 from botocore.exceptions import ClientError, NoCredentialsError
 
 from app import config
@@ -21,6 +22,7 @@ class FakeSecretsManager:
         self.secrets = list(secrets)
         self.requests: list[dict[str, str]] = []
         self.regions: list[str] = []  # the region of each client created for it
+        self.limits: list[Config] = []  # the botocore configuration of each client
 
     def get_secret_value(self, **request: str) -> dict[str, str]:
         self.requests.append(request)
@@ -37,8 +39,9 @@ def secrets_manager(isolated_config, monkeypatch):
     """Point the configuration at a fake Secrets Manager holding one password."""
     fake = FakeSecretsManager(rds_secret("first"), rds_secret("rotated"))
 
-    def client(service: str, region_name: str) -> FakeSecretsManager:
+    def client(service: str, region_name: str, config: Config) -> FakeSecretsManager:
         fake.regions.append(region_name)
+        fake.limits.append(config)
         return fake
 
     monkeypatch.setattr(boto3, "client", client)
@@ -54,11 +57,33 @@ def test_defaults_suit_the_local_container(isolated_config):
         db_port=5432,
         db_name="phishing",
         db_user="phishing",
+        db_sslmode="prefer",
         db_secret_arn="",
         log_file="",
         max_upload_bytes=5242880,
         instance_id=config.HOSTNAME,
+        release="local",
     )
+
+
+def test_release_comes_from_the_environment_when_set(isolated_config, monkeypatch):
+    monkeypatch.setenv("APP_RELEASE", "3f9a1c2b7d10")
+
+    assert config.get_settings().release == "3f9a1c2b7d10"
+
+
+def test_ssl_mode_comes_from_the_environment_when_set(isolated_config, monkeypatch):
+    monkeypatch.setenv("DB_SSLMODE", "require")
+
+    assert config.get_settings().db_sslmode == "require"
+
+
+@pytest.mark.parametrize("mode", ["required", "REQUIRE", "", "true"])
+def test_unknown_ssl_mode_is_a_configuration_error(isolated_config, monkeypatch, mode):
+    monkeypatch.setenv("DB_SSLMODE", mode)
+
+    with pytest.raises(config.ConfigError, match="DB_SSLMODE"):
+        config.get_settings()
 
 
 def test_instance_id_comes_from_the_environment_when_set(isolated_config, monkeypatch):
@@ -125,6 +150,27 @@ def test_secrets_manager_is_asked_in_the_region_named_by_the_arn(secrets_manager
     config.get_db_password()
 
     assert secrets_manager.regions == ["eu-north-1"]
+
+
+def test_secrets_manager_client_gives_up_quickly(secrets_manager):
+    # botocore's defaults wait a minute per attempt. gunicorn kills a worker that is
+    # silent for 30 seconds, so the whole fetch must fail well inside that.
+    config.get_db_password()
+
+    (limits,) = secrets_manager.limits
+    slowest_attempt = limits.connect_timeout + limits.read_timeout
+    assert (limits.connect_timeout, limits.read_timeout) == (3, 5)
+    assert limits.retries == {"total_max_attempts": 2}
+    assert slowest_attempt * limits.retries["total_max_attempts"] < 30
+
+
+def test_secrets_manager_client_is_created_once_per_process(secrets_manager):
+    config.get_db_password()
+    config.refresh_db_password()
+    config.get_db_password()
+
+    assert len(secrets_manager.requests) == 2
+    assert len(secrets_manager.regions) == 1
 
 
 def test_password_is_cached_after_the_first_fetch(secrets_manager):

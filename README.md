@@ -161,7 +161,10 @@ so a database outage degrades the service rather than taking it down.
 
 **Application code is delivered through S3.**
 Terraform packages `app/` into a versioned zip, uploads it to a private bucket, and the instance's
-`user_data` downloads it at boot. The instance role is allowed `s3:GetObject` on that key only.
+`user_data` downloads it at boot. The zip is named after the hash of its contents, so a code change is
+a new key, and that alone starts a rolling replacement of the instances. The instance role is allowed
+`s3:GetObject` on the bucket's `releases/` prefix only: one key would have to be rewritten on every
+release, while old and new instances coexist.
 *Trade-off:* boot is slower than a pre-baked AMI, and the boot depends on PyPI for dependencies.
 Alternatives considered: `git clone` (requires a token on the instance), ECR (an extra service),
 a Packer-built AMI (a build step out of proportion to the project).
@@ -186,8 +189,9 @@ authorized through IAM.
 **AWS-managed policies for the two agents, hand-written policies for the data.**
 The instance role attaches `AmazonSSMManagedInstanceCore` and `CloudWatchAgentServerPolicy`. They are
 the documented requirements of the SSM agent and the CloudWatch agent, and rewriting them by hand means
-guessing at a list of actions that AWS maintains and changes. Where the scope matters, reading one S3
-object and one database secret, the permission is an inline policy written against that exact ARN.
+guessing at a list of actions that AWS maintains and changes. Where the scope matters, reading the
+releases in one bucket and one database secret, the permission is an inline policy written against
+exactly that: one bucket prefix, one secret ARN.
 *Trade-off:* the managed policies are broader than this project uses, and AWS can change them without
 anything changing in this repository.
 
@@ -278,5 +282,12 @@ measure of spelling with a measure of what a reader would actually misread, and 
 allowlist unnecessary.
 *Trade-off:* confusability covers imitation that works on the eye, not squats that rely on a typing
 slip. `goggle.com` is one of those, and it would need its own signal, such as keyboard adjacency.
+
+**Verify the database's certificate, not only encrypt the connection.**
+On EC2 the application connects with `sslmode=require`: the connection to RDS is encrypted or it is not
+made, and RDS for PostgreSQL 16 refuses unencrypted connections on its side as well. What `require`
+does not do is check who is at the other end. The production step is `sslmode=verify-full` with the
+RDS certificate authority bundle shipped on the instance, so that the client also refuses a server
+that cannot prove it is the database.
 
 TODO — the rest is written at the end, once the system is running.

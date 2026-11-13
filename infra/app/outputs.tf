@@ -1,4 +1,4 @@
-# What is needed to test the stack from a terminal, and what phase 5 builds on.
+# What is needed to test the stack, a deployment and a teardown from a terminal.
 
 output "alb_dns_name" {
   description = "DNS name of the load balancer. It changes with every apply; read it from here each time."
@@ -26,11 +26,26 @@ output "app_security_group_id" {
 }
 
 output "instance_role_name" {
-  description = "The instance role, for phase 5 to attach its inline policies to."
+  description = "The role the instances run as."
   value       = aws_iam_role.app.name
 }
 
 output "nat_public_ip" {
   description = "The address the instances appear from on the internet, for reading third-party logs."
   value       = aws_eip.nat.public_ip
+}
+
+output "artifact_bucket" {
+  description = "The private bucket holding the release zips."
+  value       = aws_s3_bucket.artifacts.id
+}
+
+output "artifact_key" {
+  description = "Key of the current release in the bucket: releases/app-<release>.zip."
+  value       = aws_s3_object.release.key
+}
+
+output "release" {
+  description = "The current release: the first 12 hex characters of the zip's SHA-256. /health reports the same value once the instances run it."
+  value       = local.release
 }

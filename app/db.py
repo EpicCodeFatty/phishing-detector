@@ -19,6 +19,11 @@ from app.detector.models import Finding
 CONNECT_TIMEOUT_SECONDS = 5
 DEFAULT_HISTORY_LIMIT = 50
 
+# A StorageError's message is what gets logged. The driver's text is kept, because it is
+# what tells a refused password from a timeout, but only this much of it, on one line.
+MAX_ERROR_MESSAGE_LENGTH = 300
+_REDACTED = "[redacted]"
+
 # Identifies the schema-initialisation lock. Arbitrary but fixed: every instance
 # must use the same value for the lock to serialise them.
 INIT_LOCK_ID = 4815162342
@@ -134,7 +139,7 @@ def _connection() -> Iterator[psycopg.Connection]:
         with _connect() as connection:
             yield connection
     except (psycopg.Error, config.ConfigError) as error:
-        raise StorageError(f"{type(error).__name__}: {error}") from error
+        raise StorageError(f"{type(error).__name__}: {_brief(str(error))}") from error
 
 
 def _connect() -> psycopg.Connection:
@@ -157,14 +162,34 @@ def _connect() -> psycopg.Connection:
 
 def _open(password: str) -> psycopg.Connection:
     settings = config.get_settings()
-    return psycopg.connect(
-        host=settings.db_host,
-        port=settings.db_port,
-        dbname=settings.db_name,
-        user=settings.db_user,
-        password=password,
-        connect_timeout=CONNECT_TIMEOUT_SECONDS,
-    )
+    try:
+        return psycopg.connect(
+            host=settings.db_host,
+            port=settings.db_port,
+            dbname=settings.db_name,
+            user=settings.db_user,
+            password=password,
+            sslmode=settings.db_sslmode,
+            connect_timeout=CONNECT_TIMEOUT_SECONDS,
+        )
+    except psycopg.Error as error:
+        # The message ends up in a log line. libpq does not quote the password in it, but
+        # that is the driver's promise; raising a copy without it makes it this module's.
+        # Same type, so a timeout is still told apart; `from None` keeps the original,
+        # unredacted error out of any traceback.
+        raise type(error)(_without(password, str(error))) from None
+
+
+def _without(secret: str, message: str) -> str:
+    """Return the message with every occurrence of the secret blanked out."""
+    if not secret:
+        return message
+    return message.replace(secret, _REDACTED)
+
+
+def _brief(message: str) -> str:
+    """Return the message on one line, cut to MAX_ERROR_MESSAGE_LENGTH characters."""
+    return " ".join(message.split())[:MAX_ERROR_MESSAGE_LENGTH]
 
 
 def _create_schema(connection: psycopg.Connection) -> None:
@@ -174,10 +199,11 @@ def _create_schema(connection: psycopg.Connection) -> None:
 
 
 def _ensure_schema(connection: psycopg.Connection) -> None:
-    """Create the schema on this process's first use of the database.
+    """Create the schema on this process's first use of the database, unless it is there.
 
-    Done lazily rather than at startup, so the application starts, and /health
-    answers, while the database is unreachable.
+    Startup tries init_schema() once and carries on if the database is
+    unreachable, so the application starts, and /health answers, regardless.
+    This is what makes up for a failed attempt, on the first call that gets through.
     """
     global _schema_ready
     if _schema_ready:

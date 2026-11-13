@@ -9,8 +9,9 @@ import pytest
 from app.logging_setup import JsonFormatter, configure_logging, error_fields, log_event
 
 TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-REQUIRED_FIELDS = {"ts", "level", "host", "event"}
+REQUIRED_FIELDS = {"ts", "level", "host", "release", "event"}
 INSTANCE_ID = "i-0123456789abcdef0"
+RELEASE = "3f9a1c2b7d10"
 
 
 def record_for(name: str, /, error: BaseException | None = None, **fields: object):
@@ -32,7 +33,7 @@ def record_for(name: str, /, error: BaseException | None = None, **fields: objec
 
 
 def formatted(name: str, /, error: BaseException | None = None, **fields: object) -> dict:
-    line = JsonFormatter(INSTANCE_ID).format(record_for(name, error=error, **fields))
+    line = JsonFormatter(INSTANCE_ID, RELEASE).format(record_for(name, error=error, **fields))
     assert "\n" not in line
     return json.loads(line)
 
@@ -59,6 +60,12 @@ def test_host_is_the_instance_identifier():
     assert line["host"] == INSTANCE_ID
 
 
+def test_release_is_the_build_that_wrote_the_line():
+    line = formatted("scan")
+
+    assert line["release"] == RELEASE
+
+
 def test_fields_are_added_to_the_line():
     line = formatted("scan", path="/scan", status=200, duration_ms=38)
 
@@ -66,9 +73,9 @@ def test_fields_are_added_to_the_line():
 
 
 def test_a_field_cannot_overwrite_a_required_field():
-    line = formatted("scan", host="spoofed", event="spoofed")
+    line = formatted("scan", host="spoofed", release="spoofed", event="spoofed")
 
-    assert (line["host"], line["event"]) == (INSTANCE_ID, "scan")
+    assert (line["host"], line["release"], line["event"]) == (INSTANCE_ID, RELEASE, "scan")
 
 
 def test_an_error_adds_its_type_message_and_traceback():
@@ -93,7 +100,7 @@ def test_values_that_are_not_json_are_written_as_text():
 
 def test_log_file_receives_json_lines(restore_root_logger, tmp_path):
     log_file = tmp_path / "app.log"
-    configure_logging(str(log_file), INSTANCE_ID)
+    configure_logging(str(log_file), INSTANCE_ID, RELEASE)
 
     log_event(logging.getLogger("tests"), logging.INFO, "scan", status=200)
 
@@ -103,7 +110,7 @@ def test_log_file_receives_json_lines(restore_root_logger, tmp_path):
 
 def test_configured_lines_carry_the_instance_identifier(restore_root_logger, tmp_path):
     log_file = tmp_path / "app.log"
-    configure_logging(str(log_file), INSTANCE_ID)
+    configure_logging(str(log_file), INSTANCE_ID, RELEASE)
 
     log_event(logging.getLogger("tests"), logging.INFO, "scan")
 
@@ -112,8 +119,8 @@ def test_configured_lines_carry_the_instance_identifier(restore_root_logger, tmp
 
 def test_configuring_twice_does_not_duplicate_lines(restore_root_logger, tmp_path):
     log_file = tmp_path / "app.log"
-    configure_logging(str(log_file), INSTANCE_ID)
-    configure_logging(str(log_file), INSTANCE_ID)
+    configure_logging(str(log_file), INSTANCE_ID, RELEASE)
+    configure_logging(str(log_file), INSTANCE_ID, RELEASE)
 
     log_event(logging.getLogger("tests"), logging.INFO, "scan")
 
@@ -121,7 +128,7 @@ def test_configuring_twice_does_not_duplicate_lines(restore_root_logger, tmp_pat
 
 
 def test_empty_log_file_setting_logs_to_stdout(restore_root_logger, capsys):
-    configure_logging("", INSTANCE_ID)
+    configure_logging("", INSTANCE_ID, RELEASE)
 
     log_event(logging.getLogger("tests"), logging.INFO, "scan")
 
@@ -130,4 +137,4 @@ def test_empty_log_file_setting_logs_to_stdout(restore_root_logger, capsys):
 
 def test_unwritable_log_file_stops_startup(restore_root_logger, tmp_path):
     with pytest.raises(OSError):
-        configure_logging(str(tmp_path / "missing-directory" / "app.log"), INSTANCE_ID)
+        configure_logging(str(tmp_path / "missing-directory" / "app.log"), INSTANCE_ID, RELEASE)
