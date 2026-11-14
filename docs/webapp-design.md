@@ -67,6 +67,16 @@ One module reads everything from environment variables. No module anywhere else 
 | `MAX_UPLOAD_BYTES` | `5242880` | `5242880` |
 | `INSTANCE_ID` | not set (the hostname is used) | the EC2 instance ID, e.g. `i-0123456789abcdef0` |
 | `APP_RELEASE` | not set (`local`) | the release ID, e.g. `3f9a1c2b7d10` |
+| `CACHE_HOST` | not set (the cache is off), or `localhost` | the cache's primary endpoint |
+| `CACHE_PORT` | `6379` | `6379` |
+| `CACHE_PASSWORD` | from `.env` | **not set** |
+| `CACHE_SECRET_ARN` | not set | the ARN of the secret holding the cache's AUTH token |
+| `CACHE_TTL_SECONDS` | `86400` | `86400` |
+| `CACHE_TLS` | `false` for the local container | `true` (the default) |
+
+The cache settings come from `docs/bonus-cache-design.md`. The cache is off unless `CACHE_HOST` is
+set. Its token is fetched like the database password, but lazily, on the first scan that uses the
+cache, and with tighter limits; it is not rotated, so it is never re-read.
 
 `APP_RELEASE` names the build of the code that is running: the first 12 hex characters of the release
 zip's hash, written into the environment file by `user_data`. It is reported as `release` in `/health`
@@ -378,8 +388,8 @@ page can be read without opening `web.py`:
 | Template | Receives |
 |---|---|
 | `upload.html` | `max_mb: int` |
-| `result.html` | `result: Result`, `filename: str`, `sender: str`, `subject: str`, `served_by: str`, `saved: bool`, `scan_id: int \| None`, `scanned_at: datetime \| None` |
-| `history.html` | `scans: list[ScanRecord]` |
+| `result.html` | `result: Result`, `filename: str`, `sender: str`, `subject: str`, `served_by: str`, `saved: bool`, `scan_id: int \| None`, `scanned_at: datetime \| None`, `cache_hit: bool`, `seen: int \| None` |
+| `history.html` | `scans: list[ScanRecord]` (each with `cache_hit`) |
 | `error.html` | `status: int`, `message: str` |
 
 A redesign that keeps this contract is a pure markup change. Keep the table in this document in step
@@ -391,6 +401,14 @@ made (`POST /scan`), and the time the scan was made, in UTC, on the detail page 
 instead of "Scan another email". The detail page is built from the stored row, without running the
 engine again: the web layer rebuilds the `Result`, so the template receives the same variables either
 way and there is no second result template to keep in step.
+
+**`cache_hit` and `seen` come from the result cache.** `cache_hit` is true when the result was
+reused from the cache rather than analysed; the page then says, quietly, "Served from cache (scanned
+before; result reused)", on the result page and on the detail page of such a scan alike. `seen` is
+how many times this exact email was scanned in the last 24 hours, this scan included. The web layer
+passes it only when it is 2 or more, and never on the detail page, where it is not known; the page
+then says "Seen N times in the last 24 hours". In the history, a scan served from the cache has a
+small `cached` marker beside its file name.
 
 **Fonts, scripts and styles must be files under `static/`: nothing loaded from a CDN, no inline
 `<script>`, no `<style>` block, no `style=""` attribute.** Every response carries a content security

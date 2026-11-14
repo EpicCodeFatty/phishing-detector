@@ -1,8 +1,10 @@
 # Three security groups in a chain, each admitting only the one before it:
 #
-#   alb-sg   in: 443 and 80 from var.allowed_ingress_cidrs   out: 8000 to app-sg
-#   app-sg   in: 8000 from alb-sg                            out: 443 to anywhere, 5432 to db-sg
-#   db-sg    in: 5432 from app-sg (rule added here; the group is in infra/base)
+#   alb-sg     in: 443 and 80 from var.allowed_ingress_cidrs   out: 8000 to app-sg
+#   app-sg     in: 8000 from alb-sg                            out: 443 to anywhere,
+#                                                                   5432 to db-sg, 6379 to cache-sg
+#   db-sg      in: 5432 from app-sg (rule added here; the group is in infra/base)
+#   cache-sg   in: 6379 from app-sg (rule added here; the group is in infra/base)
 #
 # Port 22 appears nowhere. Shell access is through Session Manager, which works over the
 # instances' outbound 443.
@@ -125,6 +127,15 @@ resource "aws_vpc_security_group_egress_rule" "app_to_db" {
   referenced_security_group_id = local.base.db_security_group_id
 }
 
+resource "aws_vpc_security_group_egress_rule" "app_to_cache" {
+  security_group_id            = aws_security_group.app.id
+  description                  = "Valkey to the result cache"
+  ip_protocol                  = "tcp"
+  from_port                    = local.base.cache_port
+  to_port                      = local.base.cache_port
+  referenced_security_group_id = local.base.cache_security_group_id
+}
+
 # ----------------------------------------------------------------------------- Database
 #
 # The database's group belongs to infra/base, which creates it with no rules because the
@@ -137,5 +148,19 @@ resource "aws_vpc_security_group_ingress_rule" "db_from_app" {
   ip_protocol                  = "tcp"
   from_port                    = local.base.db_port
   to_port                      = local.base.db_port
+  referenced_security_group_id = aws_security_group.app.id
+}
+
+# -------------------------------------------------------------------------------- Cache
+#
+# The same arrangement as the database: the group belongs to infra/base, which creates it
+# with no rules, and its one ingress rule is added here and removed with this stack.
+
+resource "aws_vpc_security_group_ingress_rule" "cache_from_app" {
+  security_group_id            = local.base.cache_security_group_id
+  description                  = "Valkey from the application instances"
+  ip_protocol                  = "tcp"
+  from_port                    = local.base.cache_port
+  to_port                      = local.base.cache_port
   referenced_security_group_id = aws_security_group.app.id
 }

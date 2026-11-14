@@ -1,5 +1,5 @@
 # Where the logs go: one log group for the application's JSON lines, one for the boot log,
-# and four saved Logs Insights queries.
+# and the saved Logs Insights queries.
 #
 # Terraform creates the groups, not the agent. The agent's managed policy would let it
 # create a missing group, but that group would exist outside Terraform: `destroy` would not
@@ -78,6 +78,21 @@ resource "aws_cloudwatch_query_definition" "requests_by_instance" {
     filter ispresent(duration_ms) and event != "health"
     | stats count(*) as requests, avg(duration_ms) as average_ms by host
     | sort host asc
+  EOT
+}
+
+# What the result cache saves, measured. Scans only, grouped by the cache field: hit, miss,
+# off or error. analysis_ms is the time spent in the engine on a miss, and in the cache
+# lookup on a hit; duration_ms is the whole request, including the database write, which a
+# hit does not avoid.
+resource "aws_cloudwatch_query_definition" "cache_hit_ratio" {
+  name            = "${var.project}/cache-hit-ratio"
+  log_group_names = [aws_cloudwatch_log_group.app.name]
+
+  query_string = <<-EOT
+    filter event in ["scan", "api_scan"] and ispresent(cache)
+    | stats count(*) as scans, avg(analysis_ms) as average_analysis_ms, avg(duration_ms) as average_duration_ms by cache
+    | sort scans desc
   EOT
 }
 

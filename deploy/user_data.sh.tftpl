@@ -15,7 +15,7 @@ set -euxo pipefail
 # Terraform fills in. Shell variables are written without braces, so the template leaves
 # them alone; one that needs braces must have its dollar sign doubled, or the apply fails.
 #
-# Nothing here may echo, cat or log the environment file or the database secret. set -x
+# Nothing here may echo, cat or log the environment file or either secret. set -x
 # prints commands, not heredoc bodies, so the file's contents stay out of the boot log.
 
 # retry <attempts> <command...>, for the steps that depend on the network. A boot script
@@ -118,8 +118,8 @@ chmod -R u=rwX,go=rX "$APP_ROOT"
 
 # --- configuration ----------------------------------------------------------------------
 # Unquoted heredoc, on purpose: Terraform has already filled in the template variables, and
-# the shell fills in the instance ID now. The file holds the secret's ARN, never the
-# password. systemd reads it as root before dropping to the service user, so the
+# the shell fills in the instance ID now. The file holds the secrets' ARNs, never the
+# database password or the cache's AUTH token. systemd reads it as root before dropping to the service user, so the
 # application never needs to read the file itself, and 0600 is enough.
 cat > /etc/phishing-app.env <<ENVEOF
 INSTANCE_ID=$INSTANCE_ID
@@ -131,6 +131,9 @@ DB_NAME=${db_name}
 DB_USER=${db_user}
 DB_SECRET_ARN=${db_secret_arn}
 DB_SSLMODE=require
+CACHE_HOST=${cache_host}
+CACHE_PORT=${cache_port}
+CACHE_SECRET_ARN=${cache_secret_arn}
 LOG_FILE=${app_log_file}
 TLDEXTRACT_CACHE=/var/cache/phishing-app/tldextract
 ENABLE_ERROR_SIMULATION=${enable_error_simulation}

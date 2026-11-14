@@ -26,18 +26,24 @@ class FakeConnection:
 
 
 class RecordingConnection(FakeConnection):
-    """A connection that remembers the SQL it was given and answers an insert with an id."""
+    """A connection that remembers the SQL it was given and answers an insert with an id.
+
+    has_cache_hit_column is what the look-up of that column finds.
+    """
 
     NEW_ROW_ID = 7
 
-    def __init__(self) -> None:
+    def __init__(self, has_cache_hit_column: bool = True) -> None:
         self.statements: list[str] = []
+        self.has_cache_hit_column = has_cache_hit_column
 
     def execute(self, statement: str, *parameters: object) -> "RecordingConnection":
         self.statements.append(statement)
         return self
 
-    def fetchone(self) -> tuple[int]:
+    def fetchone(self) -> tuple[int] | None:
+        if self.statements[-1] == db.CACHE_HIT_COLUMN_SQL and not self.has_cache_hit_column:
+            return None
         return (self.NEW_ROW_ID,)
 
 
@@ -207,6 +213,7 @@ def test_schema_is_created_on_first_use_after_a_failed_start(attempts, monkeypat
         db.LOCK_SQL,
         db.CREATE_TABLE_SQL,
         db.CREATE_INDEX_SQL,
+        db.CACHE_HIT_COLUMN_SQL,
         db.INSERT_SQL,
     ]
 
@@ -221,6 +228,51 @@ def test_schema_is_not_created_again_once_startup_has_made_it(attempts, monkeypa
     db.save_scan(record)
 
     assert at_first_scan.statements == [db.INSERT_SQL]
+
+
+def test_a_table_without_the_cache_hit_column_has_it_added_after_the_lock(attempts, monkeypatch):
+    monkeypatch.setattr(db, "_schema_ready", False)
+    connection = RecordingConnection(has_cache_hit_column=False)
+    attempts.answers = [connection]
+
+    db.init_schema()
+
+    assert connection.statements == [
+        db.LOCK_SQL,
+        db.CREATE_TABLE_SQL,
+        db.CREATE_INDEX_SQL,
+        db.CACHE_HIT_COLUMN_SQL,
+        db.ADD_CACHE_HIT_SQL,
+    ]
+
+
+def test_a_table_that_has_the_cache_hit_column_is_not_altered(attempts, monkeypatch):
+    # ALTER TABLE takes an exclusive lock even when it has nothing to do.
+    monkeypatch.setattr(db, "_schema_ready", False)
+    connection = RecordingConnection(has_cache_hit_column=True)
+    attempts.answers = [connection]
+
+    db.init_schema()
+
+    assert db.ADD_CACHE_HIT_SQL not in connection.statements
+
+
+def test_a_scan_is_saved_as_analysed_unless_marked_as_served_from_the_cache():
+    analysed = db.ScanRecord("a.eml", None, None, 0, "Safe", "cumulative score", [], "host")
+    cached = db.ScanRecord(**(vars(analysed) | {"cache_hit": True}))
+
+    assert db._insert_parameters(analysed)[-1] is False
+    assert db._insert_parameters(cached)[-1] is True
+
+
+@pytest.mark.parametrize("statement", ["INSERT_SQL", "RECENT_SQL", "SCAN_SQL"])
+def test_every_query_names_its_columns(statement):
+    # During a rolling deploy two releases share the table, and after a rollback an older
+    # one reads rows with a column it does not know. Only named columns survive both.
+    sql = getattr(db, statement)
+
+    assert "*" not in sql
+    assert "cache_hit" in sql
 
 
 def test_nul_characters_are_replaced_before_saving():

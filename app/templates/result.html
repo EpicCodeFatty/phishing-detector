@@ -11,6 +11,9 @@
     saved: bool            False when the scan could not be written to the history
     scan_id: int | None    the history id, None when not saved
     scanned_at: datetime | None    when a stored scan was made, in UTC; None for a scan just made
+    cache_hit: bool        True when the result was reused from the cache rather than analysed
+    seen: int | None       times this exact email was scanned in the last 24 hours, this scan
+                           included; None when not known (a stored scan) or when it is the first
 -#}
 {% extends "base.html" %}
 
@@ -29,6 +32,10 @@
   <p class="verdict-reason">Decided by {{ result.decided_by }}</p>
 </section>
 
+{% if seen %}
+<p class="notice notice-info sightings" role="status">Seen {{ seen }} times in the last 24 hours</p>
+{% endif %}
+
 <dl class="scan-details">
   <dt>File</dt>
   <dd>{{ filename }}</dd>
@@ -41,6 +48,10 @@
   {% if scan_id is not none %}
   <dt>Scan</dt>
   <dd>#{{ scan_id }}</dd>
+  {% endif %}
+  {% if cache_hit %}
+  <dt>Analysis</dt>
+  <dd class="cache-note">Served from cache (scanned before; result reused)</dd>
   {% endif %}
   {% if scanned_at %}
   <dt>Scanned at</dt>

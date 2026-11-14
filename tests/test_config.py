@@ -12,6 +12,9 @@ from botocore.exceptions import ClientError, NoCredentialsError
 from app import config
 
 SECRET_ARN = "arn:aws:secretsmanager:eu-north-1:123456789012:secret:rds!db-abc123-XyZ"
+CACHE_SECRET_ARN = (
+    "arn:aws:secretsmanager:eu-north-1:123456789012:secret:phishing-detector-cache-auth-1a2B"
+)
 APP_DIRECTORY = Path(config.__file__).parent
 
 
@@ -64,6 +67,11 @@ def test_defaults_suit_the_local_container(isolated_config):
         instance_id=config.HOSTNAME,
         release="local",
         enable_error_simulation=False,
+        cache_host="",
+        cache_port=6379,
+        cache_secret_arn="",
+        cache_ttl_seconds=86400,
+        cache_tls=True,
     )
 
 
@@ -246,6 +254,113 @@ def test_secret_arn_that_is_not_an_arn_is_a_configuration_error(secrets_manager,
 
     with pytest.raises(config.ConfigError, match="not an ARN"):
         config.get_db_password()
+
+
+def test_cache_settings_come_from_the_environment_when_set(isolated_config, monkeypatch):
+    monkeypatch.setenv("CACHE_HOST", "master.cache.example")
+    monkeypatch.setenv("CACHE_PORT", "6380")
+    monkeypatch.setenv("CACHE_SECRET_ARN", CACHE_SECRET_ARN)
+    monkeypatch.setenv("CACHE_TTL_SECONDS", "60")
+    monkeypatch.setenv("CACHE_TLS", "false")
+
+    settings = config.get_settings()
+
+    assert (
+        settings.cache_host,
+        settings.cache_port,
+        settings.cache_secret_arn,
+        settings.cache_ttl_seconds,
+        settings.cache_tls,
+    ) == ("master.cache.example", 6380, CACHE_SECRET_ARN, 60, False)
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [("CACHE_PORT", "six"), ("CACHE_TTL_SECONDS", "a day"), ("CACHE_TLS", "yes")],
+)
+def test_a_malformed_cache_setting_is_a_configuration_error(
+    isolated_config, monkeypatch, name, value
+):
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(config.ConfigError, match=name):
+        config.get_settings()
+
+
+def test_cache_token_comes_from_cache_password_when_set(isolated_config, monkeypatch):
+    monkeypatch.setenv("CACHE_PASSWORD", "local-token")
+
+    assert config.get_cache_password() == "local-token"
+
+
+@pytest.fixture
+def cache_secret(secrets_manager, monkeypatch):
+    """The fake Secrets Manager, holding the cache's token as a plain string."""
+    secrets_manager.secrets = ["cache-token"]
+    monkeypatch.setenv("CACHE_SECRET_ARN", CACHE_SECRET_ARN)
+    return secrets_manager
+
+
+def test_cache_token_comes_from_secrets_manager_as_a_plain_string(cache_secret):
+    token = config.get_cache_password()
+
+    assert token == "cache-token"
+    assert cache_secret.requests == [{"SecretId": CACHE_SECRET_ARN}]
+
+
+def test_cache_token_is_fetched_with_one_short_attempt(cache_secret):
+    # The cache is optional: a slow Secrets Manager must not hold up the scan that asked.
+    config.get_cache_password()
+
+    (limits,) = cache_secret.limits
+    assert (limits.connect_timeout, limits.read_timeout) == (1, 2)
+    assert limits.retries == {"total_max_attempts": 1}
+
+
+def test_cache_token_is_kept_after_the_first_fetch(cache_secret):
+    config.get_cache_password()
+    config.get_cache_password()
+
+    assert len(cache_secret.requests) == 1
+
+
+def test_cache_token_and_database_password_use_separate_clients(cache_secret):
+    cache_secret.secrets = ["cache-token", rds_secret("first")]
+
+    config.get_cache_password()
+    config.get_db_password()
+
+    assert [(limits.connect_timeout, limits.read_timeout) for limits in cache_secret.limits] == [
+        (1, 2),
+        (3, 5),
+    ]
+
+
+def test_a_failed_cache_token_fetch_is_not_kept_so_a_later_call_tries_again(
+    cache_secret, monkeypatch
+):
+    answers = iter([ClientError({"Error": {"Code": "ThrottlingException"}}, "GetSecretValue")])
+
+    def get_secret_value(**request):
+        cache_secret.requests.append(request)
+        answer = next(answers, None)
+        if answer is not None:
+            raise answer
+        return {"SecretString": "cache-token"}
+
+    monkeypatch.setattr(cache_secret, "get_secret_value", get_secret_value)
+
+    with pytest.raises(config.ConfigError, match="ClientError"):
+        config.get_cache_password()
+    token = config.get_cache_password()
+
+    assert token == "cache-token"
+    assert len(cache_secret.requests) == 2
+
+
+def test_no_cache_token_source_is_a_configuration_error(isolated_config):
+    with pytest.raises(config.ConfigError, match="CACHE_PASSWORD"):
+        config.get_cache_password()
 
 
 def test_no_other_module_reads_the_environment():

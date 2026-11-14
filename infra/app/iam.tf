@@ -4,8 +4,8 @@
 # Two AWS-managed policies, deliberately: they are the documented requirements of the SSM
 # agent and the CloudWatch agent, and rewriting them by hand means guessing at a list of
 # actions that AWS maintains and changes. The permissions whose scope matters, the releases
-# in one bucket and one database secret, are the two inline policies at the end of this
-# file, each written against exactly what the instance reads.
+# in one bucket, the database secret and the cache's secret, are the three inline policies
+# at the end of this file, each written against exactly what the instance reads.
 
 data "aws_iam_policy_document" "ec2_assume_role" {
   statement {
@@ -81,4 +81,21 @@ resource "aws_iam_role_policy" "read_db_secret" {
   name   = "read-db-secret"
   role   = aws_iam_role.app.id
   policy = data.aws_iam_policy_document.read_db_secret.json
+}
+
+# The cache's AUTH token, the same way: one secret, read-only, and no KMS permission, since
+# it too is encrypted with the AWS-managed aws/secretsmanager key.
+data "aws_iam_policy_document" "read_cache_secret" {
+  statement {
+    sid       = "ReadCacheSecret"
+    effect    = "Allow"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [local.base.cache_secret_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "read_cache_secret" {
+  name   = "read-cache-secret"
+  role   = aws_iam_role.app.id
+  policy = data.aws_iam_policy_document.read_cache_secret.json
 }

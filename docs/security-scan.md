@@ -24,6 +24,12 @@ zone got its own NAT gateway (`docs/bonus-https-nat-design.md`). checkov and ban
 again with the same versions and commands; the checkov figures below are from that run. pip-audit
 and gitleaks were not run again, and their figures are from 13 November.
 
+**Updated again on 14 November 2026**, on the branch `feature/cache`: a result cache on
+ElastiCache (Valkey 8.2) in `infra/base`, with its AUTH token in Secrets Manager, the rules and a
+third inline policy in `infra/app`, and the `redis` client library in the application
+(`docs/bonus-cache-design.md`). checkov, bandit and pip-audit were run again with the same versions
+and commands; the figures below are from that run. gitleaks was not run again.
+
 - **gitleaks** was installed with `winget install Gitleaks.Gitleaks`. winget checks the download
   against its manifest's SHA-256, and that hash
   (`d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e`) was compared with the
@@ -36,9 +42,9 @@ and gitleaks were not run again, and their figures are from 13 November.
 
 | Tool | Findings | Fixed | Accepted | False positive | Left unexplained |
 |---|---|---|---|---|---|
-| checkov | 32 | 4 | 27 | 1 | 0 |
+| checkov | 36 | 4 | 31 | 1 | 0 |
 | bandit | 2 (both low severity) | 0 | 0 | 2 | 0 |
-| pip-audit | 0 known vulnerabilities in 28 pinned packages | 0 | 0 | 0 | 0 |
+| pip-audit | 0 known vulnerabilities in 29 pinned packages | 0 | 0 | 0 | 0 |
 | gitleaks | 0 in 10 commits, 0 in the working tree | 0 | 0 | 0 | 0 |
 
 The 32 are the findings of the phase 7 run, on 13 November. Three of them, all about plain
@@ -47,8 +53,15 @@ skips are gone and the checks pass. Of the fixed findings, the VPC flow log is s
 `infra/base`, because checkov reads one stack at a time and cannot see the flow log defined in
 `infra/app`. It is skipped there with that reason. The new resources (certificate, HTTPS
 listener, second NAT gateway and address, port 443 rule) produced no new finding. After the
-inline skips, checkov reports **196 passed, 0 failed, 29 skipped**: 27 accepted, the false
+inline skips, checkov reported **196 passed, 0 failed, 29 skipped**: 27 accepted, the false
 positive, and the flow log in `infra/base`.
+
+The cache added four findings, all accepted (section 4, *Cache*): two on the replication group and
+two on its secret. Its other checks pass: encryption at rest, encryption in transit, and an AUTH
+token. The two 6379 rules and the third inline policy in `infra/app` produced no finding. After the
+inline skips, checkov reports **226 passed, 0 failed, 33 skipped**: 31 accepted, the false
+positive, and the flow log in `infra/base`. bandit still exits 0 with the two `# nosec` lines, and
+pip-audit finds no known vulnerability in the 29 pins, `redis==8.1.0` among them.
 
 Both bandit findings are false positives (section 5), each marked `# nosec B105` on its line with
 the reason. After that, bandit reports no issues and exits with code 0.
@@ -58,6 +71,7 @@ runs it against the live account:
 
 - `read-release`: *result to be recorded*
 - `read-db-secret`: *result to be recorded*
+- `read-cache-secret`: *result to be recorded*
 - `deliver-flow-logs` (on role `phishing-detector-flow-logs`): *result to be recorded*
 
 ## 3. Fixed
@@ -272,11 +286,49 @@ reason behind each of these.
   policy for CloudWatch would be needed, at a monthly fee, to protect alarm text that holds no
   secrets. Production: that key.
 
+### Cache (`infra/base/cache.tf`)
+
+The cache is optional by design: when it is gone, scans carry on without it, slower by a few
+milliseconds, and everything in it is recomputed as scans come in. That is the reason behind each
+of these.
+
+**`CKV2_AWS_50`: no Multi-AZ automatic failover.**
+- Check: a replica in a second zone takes over if the primary fails.
+- Risk: losing the node or its zone empties the cache until it is replaced.
+- Why here: one node, on purpose. Nothing depends on the cache, so a replica would double the cost
+  of a component whose failure costs only time.
+- Production: a replica in a second zone with automatic failover, once something depends on the
+  cache, such as a rate limit.
+
+**`CKV_AWS_191`: encrypted at rest with the AWS-managed key, not a customer-managed one.**
+- Check: a customer-managed KMS key, whose key policy controls decryption.
+- Risk: no separate key policy limits who can decrypt the data at rest.
+- Why here: the data is encrypted at rest either way, and holds only what the scan history already
+  holds; a key adds a key policy and a monthly fee.
+- Production: a customer-managed key where key-level access control or audit is required.
+
+**`CKV2_AWS_57`: the AUTH token is not rotated.**
+- Check: secrets rotate automatically.
+- Risk: a token that leaks stays valid until someone changes it.
+- Why here: rotating it means changing the token on the cluster and on every instance in step,
+  which needs a rotation function and a coordinated deploy, for a cache that is reachable only from
+  the instances' security group. The token is also in `infra/base`'s Terraform state, which is
+  local and git-ignored.
+- Production: IAM authentication for ElastiCache, where the application signs a short-lived token
+  with its role and there is no long-lived secret to rotate.
+
+**`CKV_AWS_149`: the secret is encrypted with the AWS-managed key, not a customer-managed one.**
+- Check: a customer-managed KMS key for the secret.
+- Risk: no separate key policy limits who can decrypt the secret.
+- Why here: reading it already needs `secretsmanager:GetSecretValue` on its exact ARN, which only the
+  instance role has; a key adds a key policy and a monthly fee. The same as the RDS-managed secret.
+- Production: a customer-managed key where key-level access control or audit is required.
+
 ### Dependencies (`app/requirements.txt`)
 
 **No hashes.** Not a scanner finding, recorded on purpose.
 - What it means: `requirements.txt` pins every package, the dependencies' own dependencies
-  included. That was checked: pip resolves exactly the 28 pinned versions and nothing else. So two
+  included. That was checked: pip resolves exactly the 29 pinned versions and nothing else. So two
   instances launched a week apart install the same versions; the phase 7 spec's worry about drift
   does not apply. What it does not do is pin the *files*: pip checks no hash.
 - Risk: a tampered package file on the index or a mirror would be installed at boot.
@@ -324,7 +376,7 @@ What these tools do not check, so a clean report does not claim it:
   scanner here sees them.
 - **What the IAM policies allow in practice.** checkov checks policy shape. IAM Access Analyzer
   (section 2) validates the deployed policies against AWS's own rules.
-- **Dependencies beyond the pins.** pip-audit checks the 28 pinned versions against published
+- **Dependencies beyond the pins.** pip-audit checks the 29 pinned versions against published
   advisories. It does not check the system packages the boot installs with `dnf` (Python, the
   CloudWatch agent), the Amazon Linux image, or a vulnerability not yet published.
 - **The application's logic.** Bandit finds dangerous patterns, not wrong decisions; the engine's

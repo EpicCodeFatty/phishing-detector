@@ -69,6 +69,33 @@ output "db_security_group_id" {
   value       = aws_security_group.db.id
 }
 
+# -------------------------------------------------------------------------------- Cache
+
+output "cache_endpoint" {
+  description = "Host name of the cache's primary endpoint, without the port."
+  value       = aws_elasticache_replication_group.cache.primary_endpoint_address
+}
+
+output "cache_port" {
+  description = "Port of the cache."
+  value       = aws_elasticache_replication_group.cache.port
+}
+
+output "cache_secret_arn" {
+  description = "ARN of the Secrets Manager secret holding the cache's AUTH token. The ARN only, never the token."
+  value       = aws_secretsmanager_secret.cache_auth.arn
+}
+
+output "cache_security_group_id" {
+  description = "The cache's security group, for infra/app to add the ingress rule from the application."
+  value       = aws_security_group.cache.id
+}
+
+output "cache_cluster_id" {
+  description = "The replication group's one node cluster: the CacheClusterId dimension of its CloudWatch metrics."
+  value       = one(aws_elasticache_replication_group.cache.member_clusters)
+}
+
 # ------------------------------------------------------------------------ Notifications
 
 output "sns_topic_arn" {

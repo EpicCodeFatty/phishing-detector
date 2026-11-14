@@ -20,5 +20,5 @@ pythonpath = ["."]
 # A misspelt marker would silently select nothing; this makes it an error instead.
 addopts = "--strict-markers"
 markers = [
-    "integration: needs the local PostgreSQL container (docker compose up -d --wait); deselect with -m \"not integration\"",
+    "integration: needs the local PostgreSQL and Valkey containers (docker compose up -d --wait); deselect with -m \"not integration\"",
 ]

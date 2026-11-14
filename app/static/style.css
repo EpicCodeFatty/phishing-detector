@@ -208,6 +208,16 @@ input:focus-visible {
   border-left-color: var(--color-suspicious);
 }
 
+/* Information, not a warning: how often this exact email has been scanned lately. */
+.notice-info {
+  background: var(--color-surface);
+  border-left-color: var(--color-accent);
+}
+
+.sightings {
+  margin: 0 0 var(--space-4);
+}
+
 /* ---------------------------------------------------------------- Verdict */
 
 .verdict {
@@ -304,6 +314,21 @@ input:focus-visible {
 
 .served-by {
   font-family: var(--font-mono);
+}
+
+/* A result reused from the cache: stated quietly, since nothing is wrong with it. */
+.cache-note {
+  color: var(--color-text-muted);
+}
+
+/* The history table's marker for the same thing, kept small so the table stays readable. */
+.cache-tag {
+  margin-left: var(--space-1);
+  padding: 0 var(--space-1);
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
 }
 
 /* ---------------------------------------------------------------- Findings */

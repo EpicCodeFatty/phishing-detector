@@ -36,6 +36,14 @@ DEFAULTS = {
     # /simulate-error answers 404 unless this is "true". Off by default: anyone who can reach
     # the route can fire the 5XX alarm. infra/app switches it on for the review's demo.
     "ENABLE_ERROR_SIMULATION": "false",
+    # The result cache is off unless CACHE_HOST names one. That is the local default, so
+    # development and the tests need no cache; on EC2 user_data sets it.
+    "CACHE_HOST": "",
+    "CACHE_PORT": "6379",
+    # How long a cached result and a sighting count are kept: one day.
+    "CACHE_TTL_SECONDS": "86400",
+    # ElastiCache is reached over TLS only. "false" is for the local container, which has none.
+    "CACHE_TLS": "true",
 }
 
 # How an on/off setting is written. Anything else is refused at startup, so a typo such as
@@ -46,12 +54,25 @@ SWITCH_VALUES = {"true": True, "false": False}
 # failing every connection later with an error that reads like a database problem.
 SSL_MODES = ("disable", "allow", "prefer", "require", "verify-ca", "verify-full")
 
-# Limits for the Secrets Manager call. botocore's defaults wait a minute per attempt, far
-# longer than the 30 seconds after which gunicorn kills a silent worker; with these, an
-# unreachable AWS API costs a worker at most (3 + 5) seconds twice, and one error line.
-SECRETS_CONNECT_TIMEOUT_SECONDS = 3
-SECRETS_READ_TIMEOUT_SECONDS = 5
-SECRETS_TOTAL_ATTEMPTS = 2
+
+@dataclass(frozen=True)
+class SecretsLimits:
+    """How long one Secrets Manager read may take: per attempt, and how many attempts."""
+
+    connect_timeout: int  # seconds
+    read_timeout: int  # seconds
+    total_attempts: int  # the first attempt included
+
+
+# botocore's defaults wait a minute per attempt, far longer than the 30 seconds after which
+# gunicorn kills a silent worker. With these, an unreachable AWS API costs a worker at most
+# (3 + 5) seconds twice, and one error line.
+DB_SECRET_LIMITS = SecretsLimits(connect_timeout=3, read_timeout=5, total_attempts=2)
+
+# Tighter still for the cache's token, and one attempt: the cache is optional, and a slow
+# read here would hold up the scan that asked for it. A failure only means scanning without
+# the cache for a while.
+CACHE_SECRET_LIMITS = SecretsLimits(connect_timeout=1, read_timeout=2, total_attempts=1)
 
 # The key RDS stores the password under, in the secret it manages for the master user.
 SECRET_PASSWORD_KEY = "password"  # nosec B105 # the name of a JSON key, not a password
@@ -91,6 +112,12 @@ class Settings:
     release: str
     # Whether /simulate-error raises its deliberate 500, or answers 404 as if absent.
     enable_error_simulation: bool
+    # The result cache. cache_host is '' when there is none, which switches it off.
+    cache_host: str
+    cache_port: int
+    cache_secret_arn: str  # '' when the token comes from CACHE_PASSWORD
+    cache_ttl_seconds: int
+    cache_tls: bool
 
 
 @functools.cache
@@ -113,6 +140,11 @@ def get_settings() -> Settings:
         instance_id=environment.get("INSTANCE_ID") or HOSTNAME,
         release=environment["APP_RELEASE"],
         enable_error_simulation=_switch(environment, "ENABLE_ERROR_SIMULATION"),
+        cache_host=environment["CACHE_HOST"],
+        cache_port=_whole_number(environment, "CACHE_PORT"),
+        cache_secret_arn=environment.get("CACHE_SECRET_ARN", ""),
+        cache_ttl_seconds=_whole_number(environment, "CACHE_TTL_SECONDS"),
+        cache_tls=_switch(environment, "CACHE_TLS"),
     )
 
 
@@ -135,6 +167,28 @@ def get_db_password() -> str:
     if not secret_arn:
         raise ConfigError("No database password: set DB_PASSWORD locally, DB_SECRET_ARN on EC2")
     return _fetch_secret_password(secret_arn)
+
+
+@functools.cache
+def get_cache_password() -> str:
+    """Return the cache's AUTH token.
+
+    Locally it comes from CACHE_PASSWORD. On EC2 that variable is not set, and the
+    token is fetched from Secrets Manager using the instance role, with
+    CACHE_SECRET_LIMITS. It is kept for the life of the process: the token is not
+    rotated, so there is nothing to re-read.
+
+    Raises ConfigError when neither source is configured or the secret cannot be
+    read. A failure is not cached, so a later call tries again. The error message
+    never contains the token.
+    """
+    password = _environment().get("CACHE_PASSWORD", "")
+    if password:
+        return password
+    secret_arn = get_settings().cache_secret_arn
+    if not secret_arn:
+        raise ConfigError("No cache token: set CACHE_PASSWORD locally, CACHE_SECRET_ARN on EC2")
+    return _read_secret(secret_arn, CACHE_SECRET_LIMITS)
 
 
 def refresh_db_password() -> None:
@@ -182,28 +236,33 @@ def _switch(environment: dict[str, str], name: str) -> bool:
 
 
 @functools.cache
-def _secrets_client(region: str) -> BaseClient:
-    """Return the Secrets Manager client for a region, created once per process.
+def _secrets_client(region: str, limits: SecretsLimits) -> BaseClient:
+    """Return the Secrets Manager client for a region and limits, created once per process.
 
     Creating a client loads the service's model from disk, which is too slow to
     repeat for every fetch, and the client is safe to share between threads.
     """
-    limits = Config(
-        connect_timeout=SECRETS_CONNECT_TIMEOUT_SECONDS,
-        read_timeout=SECRETS_READ_TIMEOUT_SECONDS,
+    timeouts = Config(
+        connect_timeout=limits.connect_timeout,
+        read_timeout=limits.read_timeout,
         # Counts the first attempt too, unlike max_attempts, which counts retries after it.
-        retries={"total_max_attempts": SECRETS_TOTAL_ATTEMPTS},
+        retries={"total_max_attempts": limits.total_attempts},
     )
-    return boto3.client("secretsmanager", region_name=region, config=limits)
+    return boto3.client("secretsmanager", region_name=region, config=timeouts)
+
+
+def _read_secret(secret_arn: str, limits: SecretsLimits) -> str:
+    """Return a secret's string value. Raises ConfigError naming the error type only."""
+    client = _secrets_client(_region_of(secret_arn), limits)
+    try:
+        return client.get_secret_value(SecretId=secret_arn)["SecretString"]
+    except (BotoCoreError, ClientError) as error:
+        raise ConfigError(f"Cannot read the secret {secret_arn}: {type(error).__name__}") from error
 
 
 def _fetch_secret_password(secret_arn: str) -> str:
     """Read the password from the RDS-managed secret, a JSON object with a password key."""
-    client = _secrets_client(_region_of(secret_arn))
-    try:
-        secret = client.get_secret_value(SecretId=secret_arn)["SecretString"]
-    except (BotoCoreError, ClientError) as error:
-        raise ConfigError(f"Cannot read the database secret: {type(error).__name__}") from error
+    secret = _read_secret(secret_arn, DB_SECRET_LIMITS)
     try:
         return json.loads(secret)[SECRET_PASSWORD_KEY]
     except (ValueError, KeyError, TypeError):

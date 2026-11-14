@@ -95,7 +95,7 @@ resource "aws_launch_template" "app" {
   # doubled there, or the apply fails with an unknown-variable error.
   #
   # Everything the instance is told is here, and none of it is a secret: the database
-  # password is represented by its ARN only. A new release changes `release` and
+  # password and the cache's AUTH token are represented by their secrets' ARNs only. A new release changes `release` and
   # `artifact_key`, so user_data changes, and that is what creates a new template version.
   user_data = base64encode(replace(
     templatefile("${path.module}/../../deploy/user_data.sh.tftpl", {
@@ -113,6 +113,10 @@ resource "aws_launch_template" "app" {
       db_name       = local.base.db_name
       db_user       = local.base.db_username
       db_secret_arn = local.base.db_secret_arn
+
+      cache_host       = local.base.cache_endpoint
+      cache_port       = local.base.cache_port
+      cache_secret_arn = local.base.cache_secret_arn
 
       # The CloudWatch agent's configuration, as one line of JSON (agent.tf), and the log
       # file the application writes and the agent reads. The JSON names the log groups by
@@ -214,7 +218,10 @@ resource "aws_autoscaling_group" "app" {
   # refers to the NAT routes, the security group rules or the role's policies, so without
   # this Terraform creates them in parallel, and the first boot runs `dnf install` before
   # there is a way out, or asks for a release it may not read yet, fails once, and is never
-  # retried. The database rules are here so the application's first connection finds them.
+  # retried. The database rules are here so the application's first connection finds them,
+  # and the cache's rules and secret policy for the same reason: without them the first
+  # scans would find the cache unreachable and skip it for a while, which is harmless but
+  # would look like a fault in the first demo.
   # aws_route.private_app_nat names the resource, so it covers the route of every zone.
   #
   # The HTTPS listener is here for a different reason. It is the only thing that attaches
@@ -228,9 +235,12 @@ resource "aws_autoscaling_group" "app" {
     aws_vpc_security_group_egress_rule.app_https,
     aws_vpc_security_group_egress_rule.app_to_db,
     aws_vpc_security_group_ingress_rule.db_from_app,
+    aws_vpc_security_group_egress_rule.app_to_cache,
+    aws_vpc_security_group_ingress_rule.cache_from_app,
     aws_iam_role_policy_attachment.ssm,
     aws_iam_role_policy_attachment.cloudwatch,
     aws_iam_role_policy.read_release,
     aws_iam_role_policy.read_db_secret,
+    aws_iam_role_policy.read_cache_secret,
   ]
 }

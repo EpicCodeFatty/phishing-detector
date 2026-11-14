@@ -6,15 +6,25 @@ from pathlib import Path
 
 import psycopg
 import pytest
+import redis
 import werkzeug.formparser
 from flask import request, url_for
 from markupsafe import escape
 
-from app import config, db, web
-from tests.builders import browser_upload, eml, sample_upload, upload_of
-from tests.conftest import FakeHistory
+from app import cache, config, db, web
+from tests.builders import SAMPLES, browser_upload, eml, sample_upload, upload_of
+from tests.conftest import CACHE_TOKEN, FakeHistory
 
-API_KEYS = {"score", "verdict", "decided_by", "findings", "served_by", "scan_id"}
+API_KEYS = {
+    "score",
+    "verdict",
+    "decided_by",
+    "findings",
+    "served_by",
+    "scan_id",
+    "cache_hit",
+    "seen",
+}
 SAVE_WARNING = "could not be saved"
 
 # What user_data sets INSTANCE_ID to on EC2, read from IMDSv2 at boot.
@@ -755,3 +765,271 @@ def _client():
     application = web.create_app()
     application.testing = True
     return application.test_client()
+
+
+# ------------------------------------------------------------------------ Result cache
+#
+# The valkey fixture switches the cache on, against an in-memory fake (conftest.py).
+
+SEEN_TWICE = "Seen 2 times in the last 24 hours"
+FROM_CACHE = "Served from cache (scanned before; result reused)"
+CACHE_WARNING = "cache_unavailable"
+
+
+def scan_lines(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
+    return [fields for fields in request_lines(caplog) if fields["path"] in ("/scan", "/api/scan")]
+
+
+def findings_part(page: str) -> str:
+    return page[page.index("<h2>Findings</h2>") : page.index('<p class="next-action">')]
+
+
+@pytest.fixture
+def engine_calls(monkeypatch) -> list[bytes]:
+    """Count the engine's runs, while still running it."""
+    calls: list[bytes] = []
+    original = web.analyze
+
+    def counting_analyze(raw: bytes):
+        calls.append(raw)
+        return original(raw)
+
+    monkeypatch.setattr(web, "analyze", counting_analyze)
+    return calls
+
+
+def test_a_first_scan_runs_the_engine_once_and_stores_the_result(valkey, client, engine_calls):
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    assert len(engine_calls) == 1
+    assert [command[0] for command in valkey.commands] == ["GET", "INCR", "EXPIRE", "SET"]
+
+
+def test_a_repeated_scan_is_answered_from_the_cache_without_the_engine(
+    valkey, client, engine_calls
+):
+    client.post("/api/scan", data=sample_upload("paypal-phish.eml"))
+
+    client.post("/api/scan", data=sample_upload("paypal-phish.eml"))
+
+    assert len(engine_calls) == 1
+
+
+def test_a_result_from_the_cache_matches_what_the_engine_returned(valkey, client):
+    first = client.post("/api/scan", data=sample_upload("paypal-phish.eml")).get_json()
+
+    second = client.post("/api/scan", data=sample_upload("paypal-phish.eml")).get_json()
+
+    for field in ("score", "verdict", "decided_by", "findings"):
+        assert second[field] == first[field]
+    assert (first["cache_hit"], second["cache_hit"]) == (False, True)
+
+
+def test_a_result_from_the_cache_gives_the_same_page_of_findings(valkey, client):
+    first = client.post("/scan", data=sample_upload("paypal-phish.eml")).get_data(as_text=True)
+
+    second = client.post("/scan", data=sample_upload("paypal-phish.eml")).get_data(as_text=True)
+
+    assert findings_part(second) == findings_part(first)
+
+
+def test_a_scan_from_the_cache_is_saved_to_the_history_as_such(valkey, client, history):
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    assert [record.cache_hit for record in history.records] == [False, True]
+    assert history.records[1].sender == history.records[0].sender
+    assert history.records[1].subject == history.records[0].subject
+
+
+def test_the_file_name_and_instance_come_from_the_request_not_the_cache(
+    valkey, client, history, monkeypatch
+):
+    monkeypatch.setenv("INSTANCE_ID", "i-0aaaaaaaaaaaaaaaa")
+    config.get_settings.cache_clear()
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+    monkeypatch.setenv("INSTANCE_ID", "i-0bbbbbbbbbbbbbbbb")
+    config.get_settings.cache_clear()
+    raw = (SAMPLES / "paypal-phish.eml").read_bytes()
+
+    client.post("/scan", data=upload_of(raw, "forwarded-again.eml"))
+
+    cached = history.records[1]
+    assert (cached.filename, cached.served_by) == ("forwarded-again.eml", "i-0bbbbbbbbbbbbbbbb")
+
+
+def test_the_first_scan_shows_no_count_and_no_cache_line(valkey, client):
+    page = client.post("/scan", data=sample_upload("paypal-phish.eml")).get_data(as_text=True)
+
+    assert "Seen " not in page
+    assert FROM_CACHE not in page
+
+
+def test_the_second_scan_shows_its_count_and_that_it_came_from_the_cache(valkey, client):
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    page = client.post("/scan", data=sample_upload("paypal-phish.eml")).get_data(as_text=True)
+
+    assert SEEN_TWICE in page
+    assert FROM_CACHE in page
+
+
+def test_the_api_reports_the_count(valkey, client):
+    first = client.post("/api/scan", data=sample_upload("paypal-phish.eml")).get_json()
+
+    second = client.post("/api/scan", data=sample_upload("paypal-phish.eml")).get_json()
+
+    assert (first["seen"], second["seen"]) == (1, 2)
+
+
+def test_the_count_is_shared_whatever_the_file_is_called(valkey, client):
+    raw = (SAMPLES / "paypal-phish.eml").read_bytes()
+    client.post("/api/scan", data=upload_of(raw, "one.eml"))
+
+    body = client.post("/api/scan", data=upload_of(raw, "two.eml")).get_json()
+
+    assert body["seen"] == 2
+
+
+def test_the_detail_page_of_a_cached_scan_says_so_but_shows_no_count(valkey, client):
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    page = client.get("/scans/2").get_data(as_text=True)
+
+    assert FROM_CACHE in page
+    assert "Seen " not in page
+
+
+def test_the_history_marks_scans_served_from_the_cache(valkey, client):
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    page = client.get("/history").get_data(as_text=True)
+
+    assert page.count('class="cache-tag"') == 1
+
+
+def test_the_scan_log_line_says_how_the_cache_took_part(valkey, client, caplog):
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    lines = scan_lines(caplog)
+
+    assert [(line["cache"], line["seen"]) for line in lines] == [("miss", 1), ("hit", 2)]
+    assert all(isinstance(line["analysis_ms"], float) for line in lines)
+
+
+def test_without_a_cache_the_scan_is_logged_as_off_with_no_count(client, caplog):
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    (line,) = scan_lines(caplog)
+
+    assert line["cache"] == "off"
+    assert "seen" not in line
+    assert line["analysis_ms"] >= 0
+
+
+def test_without_a_cache_no_client_is_created(client, monkeypatch, engine_calls):
+    monkeypatch.setattr(cache.redis, "Redis", lambda **options: pytest.fail("client created"))
+
+    response = client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    assert response.status_code == 200
+    assert len(engine_calls) == 1
+
+
+def test_scans_carry_on_when_the_cache_is_down(valkey, client, engine_calls, caplog):
+    valkey.failure = redis.ConnectionError("Connection refused")
+
+    responses = [client.post("/scan", data=sample_upload("paypal-phish.eml")) for _ in range(4)]
+
+    assert [response.status_code for response in responses] == [200] * 4
+    assert all("Phishing" in response.get_data(as_text=True) for response in responses)
+    assert len(engine_calls) == 4
+    assert [line["cache"] for line in scan_lines(caplog)] == ["error"] * 4
+    assert [
+        record.levelno for record in caplog.records if record.getMessage() == CACHE_WARNING
+    ] == [logging.WARNING]
+
+
+def test_after_a_cache_failure_it_is_left_alone_for_thirty_seconds(valkey, client, monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(cache.time, "monotonic", lambda: now[0])
+    valkey.failure = redis.TimeoutError("Timeout reading from socket")
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+    valkey.failure = None
+
+    now[0] += 29
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+    untouched = list(valkey.commands)
+    now[0] += 2
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    assert untouched == []
+    assert valkey.commands[0][0] == "GET"
+
+
+def test_a_token_that_cannot_be_fetched_costs_neither_startup_nor_the_scan(
+    isolated_config, history, monkeypatch, engine_calls
+):
+    fetches: list[str] = []
+
+    def refuse(secret_arn, limits):
+        fetches.append(secret_arn)
+        raise config.ConfigError("Cannot read the secret: EndpointConnectionError")
+
+    monkeypatch.setenv("CACHE_HOST", "cache.example")
+    monkeypatch.setenv("CACHE_SECRET_ARN", "arn:aws:secretsmanager:eu-north-1:1:secret:c")
+    monkeypatch.setattr(config, "_read_secret", refuse)
+    test_client = _client()
+    fetched_at_startup = list(fetches)
+
+    responses = [
+        test_client.post("/scan", data=sample_upload("paypal-phish.eml")) for _ in range(3)
+    ]
+
+    assert fetched_at_startup == []
+    assert [response.status_code for response in responses] == [200] * 3
+    assert len(fetches) == 1
+    assert len(engine_calls) == 3
+
+
+def test_health_makes_no_cache_call(valkey, client):
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert valkey.clients == []
+    assert valkey.commands == []
+
+
+def test_the_cache_token_never_appears_in_a_log_line_or_a_page(valkey, client, caplog):
+    caplog.set_level(logging.DEBUG)
+    valkey.failure = redis.AuthenticationError("invalid username-password pair")
+
+    page = client.post("/scan", data=sample_upload("paypal-phish.eml")).get_data(as_text=True)
+
+    assert CACHE_TOKEN not in page
+    assert CACHE_TOKEN not in caplog.text
+    assert all(CACHE_TOKEN not in str(record.__dict__) for record in caplog.records)
+
+
+def test_a_page_from_the_cache_carries_the_security_headers(valkey, client):
+    client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    response = client.post("/scan", data=sample_upload("paypal-phish.eml"))
+
+    assert FROM_CACHE in response.get_data(as_text=True)
+    assert {name: response.headers.get(name) for name in SECURITY_HEADERS} == SECURITY_HEADERS
+
+
+def test_hostile_text_from_the_cache_is_still_escaped(valkey, client):
+    raw = XSS_FIXTURE.read_bytes()
+    client.post("/scan", **browser_upload(raw, HOSTILE_FILENAME))
+
+    page = client.post("/scan", **browser_upload(raw, HOSTILE_FILENAME)).get_data(as_text=True)
+
+    assert FROM_CACHE in page
+    assert not any(markup in page for markup in RAW_MARKUP)
+    assert all(escaped in page for escaped in ESCAPED_MARKUP)

@@ -55,6 +55,18 @@ variable "db_allocated_storage" {
   default     = 20
 }
 
+variable "cache_node_type" {
+  type        = string
+  description = "ElastiCache node type of the result cache. Check the plan shows this, and nothing larger."
+  default     = "cache.t4g.micro"
+}
+
+variable "cache_engine_version" {
+  type        = string
+  description = "Valkey engine version of the result cache: the newest 8.x offered in the region. The 9 series is newer than the client library (redis-py) has been widely used against."
+  default     = "8.2"
+}
+
 variable "alert_email" {
   type        = string
   description = "Address that receives alarm notifications. The subscription must be confirmed from the inbox once."

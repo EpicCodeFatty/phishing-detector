@@ -1,4 +1,4 @@
-"""Fixtures shared by the web, configuration, logging and database tests."""
+"""Fixtures shared by the web, configuration, logging, database and cache tests."""
 
 import itertools
 import logging
@@ -8,10 +8,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import redis
 from flask import Flask
 from flask.testing import FlaskClient
 
-from app import config, db, web
+from app import cache, config, db, web
 from app.db import ScanRecord
 
 # Every variable config.py reads. Cleared for each test, so a developer's own
@@ -29,7 +30,16 @@ CONFIG_VARIABLES = (
     "INSTANCE_ID",
     "APP_RELEASE",
     "ENABLE_ERROR_SIMULATION",
+    "CACHE_HOST",
+    "CACHE_PORT",
+    "CACHE_SECRET_ARN",
+    "CACHE_PASSWORD",
+    "CACHE_TTL_SECONDS",
+    "CACHE_TLS",
 )
+
+# Stands in for the cache's AUTH token wherever a test checks that it is never repeated.
+CACHE_TOKEN = "cache-TOKEN-marker-5e81"
 
 
 class FakeHistory:
@@ -57,22 +67,106 @@ class FakeHistory:
         return next((record for record in self.records if record.id == scan_id), None)
 
 
+class FakeValkey:
+    """An in-memory stand-in for the cache, answering the few commands app.cache sends.
+
+    Records each command, and raises `failure` from every one when it is set.
+    """
+
+    def __init__(self) -> None:
+        self.values: dict[str, object] = {}
+        self.expiries: dict[str, int] = {}
+        self.commands: list[tuple[object, ...]] = []
+        self.failure: redis.RedisError | None = None
+        self.clients: list[dict[str, object]] = []  # the options of each client created
+
+    def pipeline(self, transaction: bool = True) -> "FakePipeline":
+        return FakePipeline(self)
+
+    def get(self, key: str) -> object:
+        self._record("GET", key)
+        return self.values.get(key)
+
+    def incr(self, key: str) -> int:
+        self._record("INCR", key)
+        self.values[key] = int(self.values.get(key, 0)) + 1
+        return self.values[key]
+
+    def expire(self, key: str, seconds: int, nx: bool = False) -> bool:
+        self._record("EXPIRE", key, seconds, "NX" if nx else "")
+        if nx and key in self.expiries:
+            return False
+        self.expiries[key] = seconds
+        return True
+
+    def set(self, key: str, value: str, ex: int) -> bool:
+        self._record("SET", key, ex)
+        self.values[key] = value
+        self.expiries[key] = ex
+        return True
+
+    def delete(self, key: str) -> int:
+        self._record("DEL", key)
+        return 1 if self.values.pop(key, None) is not None else 0
+
+    def _record(self, *command: object) -> None:
+        if self.failure is not None:
+            raise self.failure
+        self.commands.append(command)
+
+
+class FakePipeline:
+    """Queues commands and runs them against the fake on execute(), as one round trip."""
+
+    def __init__(self, server: FakeValkey) -> None:
+        self.server = server
+        self.queued: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    def __getattr__(self, name: str):
+        def queue(*args: object, **kwargs: object) -> "FakePipeline":
+            self.queued.append((name, args, kwargs))
+            return self
+
+        return queue
+
+    def execute(self) -> list[object]:
+        return [getattr(self.server, name)(*args, **kwargs) for name, args, kwargs in self.queued]
+
+
 @pytest.fixture
 def isolated_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
-    """Configuration from the defaults and the test's own settings only."""
+    """Configuration from the defaults and the test's own settings only, and a fresh cache state."""
     monkeypatch.setattr(config, "ENV_FILE", tmp_path / "absent.env")
     for name in CONFIG_VARIABLES:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(cache, "_connection", cache._Connection())
     _forget_cached_configuration()
     yield
     _forget_cached_configuration()
 
 
 def _forget_cached_configuration() -> None:
-    """Drop everything config caches per process: settings, password, Secrets Manager client."""
+    """Drop everything config caches per process: settings, secrets, Secrets Manager clients."""
     config.get_settings.cache_clear()
     config.refresh_db_password()
+    config.get_cache_password.cache_clear()
     config._secrets_client.cache_clear()
+
+
+@pytest.fixture
+def valkey(isolated_config: None, monkeypatch: pytest.MonkeyPatch) -> FakeValkey:
+    """Switch the cache on, pointed at an in-memory fake, with the token in CACHE_PASSWORD."""
+    fake = FakeValkey()
+
+    def client(**options: object) -> FakeValkey:
+        fake.clients.append(options)
+        return fake
+
+    monkeypatch.setenv("CACHE_HOST", "cache.example")
+    monkeypatch.setenv("CACHE_PASSWORD", CACHE_TOKEN)
+    monkeypatch.setattr(cache.redis, "Redis", client)
+    config.get_settings.cache_clear()
+    return fake
 
 
 @pytest.fixture

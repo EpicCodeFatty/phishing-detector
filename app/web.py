@@ -1,9 +1,10 @@
 """HTTP layer: the upload form, scan results, scan history, a JSON API and the health check.
 
 The engine is run as analyze(raw_bytes) and nothing more. A stored scan is shown from
-its saved findings without running the engine again: the email was never kept. Every failure is
-turned into a friendly page here, or a JSON error under /api/; no stack trace,
-secret or database detail ever reaches a response.
+its saved findings without running the engine again: the email was never kept. An email
+already scanned since the last deploy is answered from the result cache (app/cache.py), when
+there is one, the same way. Every failure is turned into a friendly page here, or a JSON
+error under /api/; no stack trace, secret or database detail ever reaches a response.
 
 Run locally:   flask --app app.web run --port 8000
 Run on EC2:    gunicorn --bind 0.0.0.0:8000 'app.web:create_app()'
@@ -13,7 +14,7 @@ import io
 import logging
 import time
 from dataclasses import asdict, dataclass
-from typing import IO
+from typing import IO, Any
 
 from flask import (
     Blueprint,
@@ -29,9 +30,9 @@ from flask import (
 from werkzeug.exceptions import BadRequest, HTTPException, NotFound
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from app import config, db
+from app import cache, config, db
 from app.detector import analyze
-from app.detector.models import Result
+from app.detector.models import Finding, Result
 from app.detector.parse import parse_email
 from app.detector.scoring import score_categories
 from app.logging_setup import configure_logging, error_fields, log_event
@@ -42,6 +43,14 @@ UPLOAD_FIELD = "file"
 API_PREFIX = "/api/"
 BYTES_PER_MEGABYTE = 1024 * 1024
 MILLISECONDS_PER_SECOND = 1000
+
+# analysis_ms is logged to two decimal places: the engine takes a few milliseconds and a
+# cache lookup about one, so whole milliseconds would hide the difference being measured.
+ANALYSIS_MS_DECIMALS = 2
+
+# The result page says how often an email was seen only from the second time: "seen once"
+# would be on every new scan, and says nothing.
+MIN_SIGHTINGS_SHOWN = 2
 
 # The development server's address when this module is run directly. Port 8000 is
 # the one the load balancer forwards to on EC2.
@@ -109,11 +118,15 @@ class InMemoryRequest(Request):
 
 @dataclass(frozen=True)
 class ScanOutcome:
-    """A finished scan: what the engine found, the record of it, and its id if saved."""
+    """A scan to show: what the engine found, the record of it, and its id if saved.
+
+    A scan just made, or one read back from the history.
+    """
 
     result: Result
     record: db.ScanRecord
     scan_id: int | None  # None when the history could not be written
+    seen: int | None = None  # times scanned in the last day; None when not known
 
 
 def create_app() -> Flask:
@@ -157,8 +170,7 @@ def upload_form() -> str:
 @pages.post("/scan")
 def scan() -> str:
     """Analyse the uploaded file, save it to the history, and show the result."""
-    outcome = _scan_upload()
-    return _result_page(outcome.result, outcome.record, outcome.scan_id)
+    return _result_page(_scan_upload())
 
 
 @pages.get("/scans/<int:scan_id>")
@@ -177,7 +189,7 @@ def scan_view(scan_id: int) -> str | tuple[str | Response, int]:
         return _error_response(SERVICE_UNAVAILABLE)
     if record is None:
         raise NotFound()
-    return _result_page(_stored_result(record), record, record.id)
+    return _result_page(ScanOutcome(_stored_result(record), record, record.id))
 
 
 @pages.get("/history")
@@ -193,7 +205,10 @@ def history() -> str | tuple[str | Response, int]:
 
 @pages.post("/api/scan")
 def api_scan() -> Response:
-    """Same as /scan, answered in JSON. scan_id is null when the scan was not saved."""
+    """Same as /scan, answered in JSON.
+
+    scan_id is null when the scan was not saved, and seen when the count is not known.
+    """
     outcome = _scan_upload()
     return jsonify(
         score=outcome.result.score,
@@ -202,6 +217,8 @@ def api_scan() -> Response:
         findings=[asdict(found) for found in outcome.result.findings],
         served_by=outcome.record.served_by,
         scan_id=outcome.scan_id,
+        cache_hit=outcome.record.cache_hit,
+        seen=outcome.seen,
     )
 
 
@@ -212,7 +229,8 @@ def health() -> tuple[dict[str, str], int]:
     If it did, one database outage would fail both instances' checks at once:
     the load balancer would be left without targets, and the Auto Scaling Group
     would replace instances in a loop that outlives the outage. A database
-    problem is visible on the 5XX alarm and the RDS metrics instead.
+    problem is visible on the 5XX alarm and the RDS metrics instead. The same
+    goes for the cache, which is not even required.
 
     host is the instance identifier, never the hostname, which on EC2 contains
     the private IP address. release is the build of the code that answered:
@@ -250,16 +268,50 @@ def _initialise_schema() -> None:
 
 
 def _scan_upload() -> ScanOutcome:
-    """Run the scan pipeline on the uploaded file. Raises BadRequest when there is none."""
+    """Run the scan pipeline on the uploaded file. Raises BadRequest when there is none.
+
+    The cache is asked first. On a hit the stored result is used and the engine does
+    not run; otherwise the engine runs and its result is stored. Either way the scan
+    is saved to the history, marked with whether it came from the cache.
+
+    analysis_ms in the log line is what the cache is there to save: the time spent in
+    the engine on a miss, and in the cache lookup on a hit.
+    """
     upload = request.files.get(UPLOAD_FIELD)
     if upload is None or not upload.filename:
         raise BadRequest()
 
     raw = upload.read()
+    digest = cache.content_hash(raw)
+    started = time.perf_counter()
+    cached = cache.lookup(digest)
+    if cached.value is not None:
+        record = _record_from_cache(cached.value, upload.filename)
+        result = _stored_result(record)
+    else:
+        started = time.perf_counter()
+        result, record = _analyse(raw, upload.filename)
+        cache.store(digest, _cache_value(record))
+    analysis_ms = round(_milliseconds_since(started), ANALYSIS_MS_DECIMALS)
+
+    g.log_fields |= {
+        "verdict": result.verdict,
+        "score": result.score,
+        "filename": upload.filename,
+        "cache": cached.status.value,
+        "analysis_ms": analysis_ms,
+    }
+    if cached.seen is not None:
+        g.log_fields["seen"] = cached.seen
+    return ScanOutcome(result, record, _save(record), cached.seen)
+
+
+def _analyse(raw: bytes, filename: str) -> tuple[Result, db.ScanRecord]:
+    """Run the engine on the upload, and build the record of the scan to save."""
     result = analyze(raw)
     email = parse_email(raw)
     record = db.ScanRecord(
-        filename=upload.filename,
+        filename=filename,
         sender=email.from_header or None,
         subject=email.subject or None,
         score=result.score,
@@ -268,32 +320,70 @@ def _scan_upload() -> ScanOutcome:
         findings=result.findings,
         served_by=config.get_settings().instance_id,
     )
-    g.log_fields |= {"verdict": result.verdict, "score": result.score, "filename": upload.filename}
-    return ScanOutcome(result=result, record=record, scan_id=_save(record))
+    return result, record
 
 
-def _result_page(result: Result, record: db.ScanRecord, scan_id: int | None) -> str:
+def _cache_value(record: db.ScanRecord) -> dict[str, Any]:
+    """Return what the cache keeps for a scan: what the history keeps, less the request's own.
+
+    The file name and the instance that served the scan belong to each request, so they
+    are never taken from the cache. Neither are the email's body or attachments: they
+    are not in the record at all.
+    """
+    return {
+        "score": record.score,
+        "verdict": record.verdict,
+        "decided_by": record.decided_by,
+        "findings": [asdict(found) for found in record.findings],
+        "sender": record.sender,
+        "subject": record.subject,
+    }
+
+
+def _record_from_cache(value: dict[str, Any], filename: str) -> db.ScanRecord:
+    """Build the record of a scan answered from the cache. The value has been checked."""
+    return db.ScanRecord(
+        filename=filename,
+        sender=value["sender"],
+        subject=value["subject"],
+        score=value["score"],
+        verdict=value["verdict"],
+        decided_by=value["decided_by"],
+        findings=[Finding(**item) for item in value["findings"]],
+        served_by=config.get_settings().instance_id,
+        cache_hit=True,
+    )
+
+
+def _result_page(outcome: ScanOutcome) -> str:
     """Render result.html, for a scan just made or for one read back from the history.
 
     scan_id is None when a new scan could not be saved. Only a record read back from
     the history has a created_at, and that is what tells the template which of the two
-    pages it is drawing.
+    pages it is drawing. seen is passed on only from MIN_SIGHTINGS_SHOWN up.
     """
+    record = outcome.record
+    seen = outcome.seen
     return render_template(
         "result.html",
-        result=result,
+        result=outcome.result,
         filename=record.filename,
         sender=record.sender or "",
         subject=record.subject or "",
         served_by=record.served_by,
-        saved=scan_id is not None,
-        scan_id=scan_id,
+        saved=outcome.scan_id is not None,
+        scan_id=outcome.scan_id,
         scanned_at=record.created_at,
+        cache_hit=record.cache_hit,
+        seen=seen if seen is not None and seen >= MIN_SIGHTINGS_SHOWN else None,
     )
 
 
 def _stored_result(record: db.ScanRecord) -> Result:
     """Rebuild the engine's Result from a stored scan, without running the engine again.
+
+    Stored means in the history, or in the cache: a scan answered from the cache is
+    rebuilt here too, from a record made of the cached value.
 
     Score, verdict and decided_by are shown as they were stored: what the scan concluded
     at the time, whatever the engine's rules have become since. The per-category subtotals
@@ -327,6 +417,10 @@ def _max_upload_megabytes() -> int:
     return current_app.config["MAX_CONTENT_LENGTH"] // BYTES_PER_MEGABYTE
 
 
+def _milliseconds_since(started: float) -> float:
+    return (time.perf_counter() - started) * MILLISECONDS_PER_SECOND
+
+
 def _start_request_log() -> None:
     g.request_started = time.perf_counter()
     g.log_fields = {}
@@ -334,8 +428,7 @@ def _start_request_log() -> None:
 
 def _finish_request_log(response: Response) -> Response:
     """Log one line for the request, once the response is ready."""
-    started = g.get("request_started", time.perf_counter())
-    duration_ms = round((time.perf_counter() - started) * MILLISECONDS_PER_SECOND)
+    duration_ms = round(_milliseconds_since(g.get("request_started", time.perf_counter())))
     level = logging.ERROR if response.status_code >= SERVER_ERROR else logging.INFO
     log_event(
         logger,

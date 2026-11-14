@@ -86,6 +86,8 @@ def test_every_page_template_documents_what_it_receives():
             "saved",
             "scan_id",
             "scanned_at",
+            "cache_hit",
+            "seen",
         },
         "history.html": {"scans"},
         "error.html": {"status", "message"},

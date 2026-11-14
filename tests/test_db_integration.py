@@ -119,6 +119,79 @@ def test_instances_starting_at_once_all_initialise_the_schema(database):
     assert table_exists()
 
 
+# The table as every release before the cache created it: RDS already has one like this.
+TABLE_BEFORE_THE_CACHE = """
+CREATE TABLE scans (
+    id          SERIAL PRIMARY KEY,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    filename    TEXT        NOT NULL,
+    sender      TEXT,
+    subject     TEXT,
+    score       INTEGER     NOT NULL,
+    verdict     TEXT        NOT NULL,
+    decided_by  TEXT,
+    findings    JSONB       NOT NULL,
+    served_by   TEXT        NOT NULL
+)
+"""
+
+# How the previous release inserts: without naming cache_hit, as it will during a rolling
+# deploy, and after a rollback.
+PREVIOUS_RELEASE_INSERT = """
+INSERT INTO scans (filename, sender, subject, score, verdict, decided_by, findings, served_by)
+VALUES ('old.eml', NULL, NULL, 0, 'Safe', 'cumulative score', '[]', 'i-0old')
+"""
+
+
+def create_table_before_the_cache() -> None:
+    with connect_as_owner(TEST_DATABASE) as connection:
+        connection.execute(TABLE_BEFORE_THE_CACHE)
+        connection.execute(PREVIOUS_RELEASE_INSERT)
+
+
+def cache_hit_column() -> tuple[str, str, str] | None:
+    with connect_as_owner(TEST_DATABASE) as connection:
+        return connection.execute(
+            "SELECT data_type, is_nullable, column_default FROM information_schema.columns"
+            " WHERE table_name = 'scans' AND column_name = 'cache_hit'"
+        ).fetchone()
+
+
+def test_a_new_table_has_the_cache_hit_column(database):
+    db.init_schema()
+
+    assert cache_hit_column() == ("boolean", "NO", "false")
+
+
+def test_the_cache_hit_column_is_added_to_an_existing_table_with_rows(database):
+    create_table_before_the_cache()
+
+    db.init_schema()
+    (old,) = db.recent_scans()
+
+    assert cache_hit_column() == ("boolean", "NO", "false")
+    assert (old.filename, old.cache_hit) == ("old.eml", False)
+
+
+def test_the_previous_release_can_still_insert_once_the_column_exists(database):
+    db.init_schema()
+
+    with connect_as_owner(TEST_DATABASE) as connection:
+        connection.execute(PREVIOUS_RELEASE_INSERT)
+
+    (old,) = db.recent_scans()
+    assert old.cache_hit is False
+
+
+def test_a_scan_served_from_the_cache_reads_back_as_such(database):
+    record = ScanRecord(**(vars(record_for("paypal-phish.eml")) | {"cache_hit": True}))
+
+    scan_id = db.save_scan(record)
+
+    assert db.get_scan(scan_id).cache_hit is True
+    assert db.recent_scans()[0].cache_hit is True
+
+
 def test_first_save_creates_the_table(database):
     scan_id = db.save_scan(record_for("team-lunch.eml"))
 

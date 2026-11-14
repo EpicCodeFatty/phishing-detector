@@ -39,11 +39,32 @@ CREATE TABLE IF NOT EXISTS scans (
     verdict     TEXT        NOT NULL,
     decided_by  TEXT,
     findings    JSONB       NOT NULL,
-    served_by   TEXT        NOT NULL
+    served_by   TEXT        NOT NULL,
+    cache_hit   BOOLEAN     NOT NULL DEFAULT false
 )
 """
 
 CREATE_INDEX_SQL = "CREATE INDEX IF NOT EXISTS scans_created_at_idx ON scans (created_at DESC)"
+
+# cache_hit came after the table: CREATE TABLE IF NOT EXISTS has it, but does nothing to a
+# table that already exists, as it does on RDS. The column is added there, once.
+#
+# Looked up before altering, because ALTER TABLE takes an exclusive lock on the table even
+# when IF NOT EXISTS leaves it nothing to do, and this runs in every worker at every start.
+#
+# The default is what keeps a rolling deploy safe: while it runs, the previous release
+# inserts rows without naming the column, and every query in both releases names its
+# columns, so none reads a row by position. It is also what lets the previous release run
+# again after a rollback.
+CACHE_HIT_COLUMN_SQL = """
+SELECT 1
+FROM information_schema.columns
+WHERE table_schema = current_schema() AND table_name = 'scans' AND column_name = 'cache_hit'
+"""
+
+ADD_CACHE_HIT_SQL = (
+    "ALTER TABLE scans ADD COLUMN IF NOT EXISTS cache_hit BOOLEAN NOT NULL DEFAULT false"
+)
 
 # Held until the transaction ends, not released explicitly. An explicit unlock
 # comes before the commit, so a second instance could take the lock, miss the
@@ -51,13 +72,16 @@ CREATE_INDEX_SQL = "CREATE INDEX IF NOT EXISTS scans_created_at_idx ON scans (cr
 LOCK_SQL = "SELECT pg_advisory_xact_lock(%s)"
 
 INSERT_SQL = """
-INSERT INTO scans (filename, sender, subject, score, verdict, decided_by, findings, served_by)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+INSERT INTO scans (
+    filename, sender, subject, score, verdict, decided_by, findings, served_by, cache_hit
+)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
 RETURNING id
 """
 
 RECENT_SQL = """
-SELECT id, created_at, filename, sender, subject, score, verdict, decided_by, findings, served_by
+SELECT id, created_at, filename, sender, subject, score, verdict, decided_by, findings, served_by,
+       cache_hit
 FROM scans
 ORDER BY created_at DESC, id DESC
 LIMIT %s
@@ -66,7 +90,8 @@ LIMIT %s
 # The same columns as RECENT_SQL, written out again rather than shared: a statement built
 # by joining strings is what a scanner, and a reviewer, is right to distrust on sight.
 SCAN_SQL = """
-SELECT id, created_at, filename, sender, subject, score, verdict, decided_by, findings, served_by
+SELECT id, created_at, filename, sender, subject, score, verdict, decided_by, findings, served_by,
+       cache_hit
 FROM scans
 WHERE id = %s
 """
@@ -96,12 +121,13 @@ class ScanRecord:
     decided_by: str
     findings: list[Finding]
     served_by: str  # identifier of the instance that ran the scan: its EC2 instance ID
+    cache_hit: bool = False  # True when the result was reused from the cache, not analysed
     id: int | None = None  # assigned by the database
     created_at: datetime | None = None  # assigned by the database, in UTC
 
 
 def init_schema() -> None:
-    """Create the scans table and its index if they do not exist yet.
+    """Create the scans table and its index if they do not exist, and add any missing column.
 
     Safe to run from several instances at the same moment. Raises StorageError.
     """
@@ -212,6 +238,8 @@ def _create_schema(connection: psycopg.Connection) -> None:
     connection.execute(LOCK_SQL, (INIT_LOCK_ID,))
     connection.execute(CREATE_TABLE_SQL)
     connection.execute(CREATE_INDEX_SQL)
+    if connection.execute(CACHE_HIT_COLUMN_SQL).fetchone() is None:
+        connection.execute(ADD_CACHE_HIT_SQL)
 
 
 def _ensure_schema(connection: psycopg.Connection) -> None:
@@ -241,6 +269,7 @@ def _insert_parameters(record: ScanRecord) -> tuple[object, ...]:
         _storable(record.decided_by),
         Jsonb(findings),
         _storable(record.served_by),
+        record.cache_hit,
     )
 
 
@@ -262,6 +291,7 @@ def _record_from_row(row: dict[str, object]) -> ScanRecord:
         decided_by=row["decided_by"],
         findings=[Finding(**item) for item in row["findings"]],
         served_by=row["served_by"],
+        cache_hit=row["cache_hit"],
         id=row["id"],
         created_at=created_at.astimezone(UTC) if isinstance(created_at, datetime) else None,
     )

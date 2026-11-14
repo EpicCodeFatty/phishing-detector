@@ -7,6 +7,8 @@
 # 4. Are requests succeeding?          load balancer metrics
 # 5. Where are the logs?               the log groups and saved queries in logs.tf
 #
+# A sixth row shows the result cache, which infra/base creates.
+#
 # The first, third and fourth cost nothing and need no code: AWS publishes them.
 
 locals {
@@ -37,7 +39,13 @@ locals {
     aws_cloudwatch_query_definition.requests_by_instance.name,
     aws_cloudwatch_query_definition.slowest_requests.name,
     aws_cloudwatch_query_definition.rejected_traffic.name,
+    aws_cloudwatch_query_definition.cache_hit_ratio.name,
   ]
+
+  # The result cache's metrics, by node. SEARCH with the cluster ID from infra/base's output,
+  # never a hand-built string, and with the node in the schema: ElastiCache publishes these
+  # host and engine metrics per node, and the one node's ID is AWS's to choose.
+  cache_search = "{AWS/ElastiCache,CacheClusterId,CacheNodeId} CacheClusterId=\"${local.base.cache_cluster_id}\""
 
   # The dashboard is a grid 24 columns wide: x and width are in columns, y and height in
   # rows. Each question gets a one-row heading and a six-row band of widgets under it. The
@@ -388,11 +396,115 @@ locals {
       }
     },
 
-    # -------------------------------------------------------------------------- Alarms
+    # --------------------------------------------------------------------------- Cache
+    #
+    # No alarm goes with this row: the cache is optional, and when it fails scans carry on
+    # without it. That is not an incident in this design.
     {
       type       = "text"
       x          = 0
       y          = 35
+      width      = 24
+      height     = 1
+      properties = { markdown = "## Cache", background = "transparent" }
+    },
+    {
+      type   = "metric"
+      x      = 0
+      y      = 36
+      width  = 6
+      height = 6
+
+      # The engine counts key reads, not scans. Each scan reads its result key once, so hits
+      # follow the scans served from the cache and misses the scans the engine analysed,
+      # give or take the sighting counter's own bookkeeping.
+      properties = {
+        title   = "Cache hits and misses per minute"
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = local.period_seconds
+        yAxis   = { left = { min = 0 } }
+
+        metrics = [
+          [{ id = "hits", label = "Hits", color = local.colour_success, expression = "SEARCH('${local.cache_search} MetricName=\"CacheHits\"', 'Sum', ${local.period_seconds})" }],
+          [{ id = "misses", label = "Misses", color = local.colour_client_error, expression = "SEARCH('${local.cache_search} MetricName=\"CacheMisses\"', 'Sum', ${local.period_seconds})" }],
+        ]
+      }
+    },
+    {
+      type   = "metric"
+      x      = 6
+      y      = 36
+      width  = 6
+      height = 6
+
+      # One pooled connection per gunicorn worker that has used the cache: four at most with
+      # two instances of two workers.
+      properties = {
+        title   = "Cache connections"
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = local.period_seconds
+        yAxis   = { left = { min = 0 } }
+
+        metrics = [[{
+          id         = "connections"
+          expression = "SEARCH('${local.cache_search} MetricName=\"CurrConnections\"', 'Maximum', ${local.period_seconds})"
+        }]]
+      }
+    },
+    {
+      type   = "metric"
+      x      = 12
+      y      = 36
+      width  = 6
+      height = 6
+
+      properties = {
+        title   = "Cache memory used (%)"
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = local.period_seconds
+        yAxis   = { left = { min = 0, max = 100 } }
+
+        metrics = [[{
+          id         = "memory"
+          expression = "SEARCH('${local.cache_search} MetricName=\"DatabaseMemoryUsagePercentage\"', 'Maximum', ${local.period_seconds})"
+        }]]
+      }
+    },
+    {
+      type   = "metric"
+      x      = 18
+      y      = 36
+      width  = 6
+      height = 6
+
+      # The engine's own thread, not the node's whole CPU: Valkey runs its commands on one
+      # core, so this is the figure that shows it is busy.
+      properties = {
+        title   = "Cache engine CPU (%)"
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = local.period_seconds
+        yAxis   = { left = { min = 0, max = 100 } }
+
+        metrics = [[{
+          id         = "engine_cpu"
+          expression = "SEARCH('${local.cache_search} MetricName=\"EngineCPUUtilization\"', 'Average', ${local.period_seconds})"
+        }]]
+      }
+    },
+
+    # -------------------------------------------------------------------------- Alarms
+    {
+      type       = "text"
+      x          = 0
+      y          = 42
       width      = 24
       height     = 1
       properties = { markdown = "## Alarms", background = "transparent" }
@@ -400,7 +512,7 @@ locals {
     {
       type   = "alarm"
       x      = 0
-      y      = 36
+      y      = 43
       width  = 24
       height = 3
 
