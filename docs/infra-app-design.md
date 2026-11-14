@@ -97,6 +97,10 @@ resource "aws_route" "private_app_nat" {
 **The NAT goes in a public subnet, not a private one.** This catches people out: the gateway that gives
 private instances a way out must itself sit where there is a route to the internet gateway.
 
+> **Superseded.** Since `docs/bonus-https-nat-design.md` there is one NAT gateway per availability
+> zone, and each route table points at the gateway of its own zone. The paragraph below describes
+> the stack as phase 4 built it.
+
 **One NAT serves both availability zones.** Both private-app route tables point at it, which is why
 `base` created a table per AZ. The accepted risk is stated in the README: if AZ a fails, the instance in
 AZ b keeps serving traffic through the load balancer but cannot reach S3, Secrets Manager, CloudWatch or
@@ -553,6 +557,10 @@ Outputs: `alb_dns_name`, `alb_url` (with `http://` in front), `asg_name`, `targe
 for phase 5; the NAT address is the address the instances appear from, which is useful when reading
 third-party logs.
 
+> **Superseded.** Since `docs/bonus-https-nat-design.md`, `alb_url` starts with `https://`,
+> `alb_http_url` is the `http://` address, and `nat_public_ip` is `nat_public_ips`, a map from zone
+> to address.
+
 ---
 
 ## 11. Applying it
@@ -594,11 +602,12 @@ security group rule mentions port 22.
 
 ```powershell
 $url = terraform output -raw alb_url
-curl.exe -s "$url/health"
-1..8 | ForEach-Object { curl.exe -s $url }
+curl.exe -sk "$url/health"
+1..8 | ForEach-Object { curl.exe -sk $url }
 ```
 
 On Windows write `curl.exe`. Plain `curl` in PowerShell is an alias for a different command.
+`-k` accepts the load balancer's self-signed certificate (`docs/bonus-https-nat-design.md`).
 
 **A 503 for the first minute or two is normal.** It means the load balancer is up and has no healthy
 targets yet. Watch EC2 → Target Groups until both read `healthy`.
@@ -673,6 +682,9 @@ this is where its contents come from.
 | 2 × t3.micro | ~$0.50 |
 | Public IPv4 addresses (NAT + two load balancer nodes) | ~$0.35 |
 | **This stack, running** | **~$2.55** |
+
+> **Superseded.** With a NAT gateway per zone the stack costs about $3.77 a day; the current table
+> is in the README, under Cost.
 
 At the end of each working session:
 

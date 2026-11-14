@@ -7,7 +7,12 @@ output "alb_dns_name" {
 }
 
 output "alb_url" {
-  description = "Address of the service, ready to paste into curl or a browser."
+  description = "Address of the service, over HTTPS. The certificate is self-signed: a browser warns first, and curl needs -k."
+  value       = "https://${aws_lb.main.dns_name}"
+}
+
+output "alb_http_url" {
+  description = "The same address over plain HTTP, for testing that port 80 answers with a redirect to HTTPS."
   value       = "http://${aws_lb.main.dns_name}"
 }
 
@@ -31,9 +36,9 @@ output "instance_role_name" {
   value       = aws_iam_role.app.name
 }
 
-output "nat_public_ip" {
-  description = "The address the instances appear from on the internet, for reading third-party logs."
-  value       = aws_eip.nat.public_ip
+output "nat_public_ips" {
+  description = "Availability zone -> the address the instances in that zone appear from on the internet, for reading third-party logs."
+  value       = { for zone, address in aws_eip.nat : zone => address.public_ip }
 }
 
 output "artifact_bucket" {

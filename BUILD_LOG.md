@@ -266,6 +266,30 @@ range. Use a 1-hour range in the demo.
 **Lesson.** A SEARCH expression shows every series that reported inside the time range, including
 series from instances that no longer exist.
 
+### 2026-11-14 — One NAT gateway left the surviving instance unable to heal
+
+**Date.** 14 November 2026.
+
+**Phase.** Bonus A, HTTPS on the load balancer and a NAT gateway per availability zone.
+
+**Symptom.** None on a running system: a gap in the design, not a failure that happened.
+
+**How it was found.** In an availability review of the design.
+
+**Cause.** The stack started with a single NAT gateway, to save cost. Both private route tables
+sent internet traffic to it, in the first availability zone. If that zone failed, the instance in
+the other zone would keep serving through the load balancer but could not heal: no way out to S3,
+Secrets Manager, CloudWatch or Session Manager, and a replacement instance could not boot.
+
+**Fix.** One NAT gateway per availability zone, each private route table pointing at the gateway
+in its own zone. (from the build session) The change is in `infra/app/nat.tf`, keyed by zone name
+throughout; the `nat_public_ip` output became `nat_public_ips`, a map from zone to address. It
+adds about $1.10 a day for the gateway and about $0.12 for its address, while the stack runs.
+
+**Lesson.** Two instances in two zones are not highly available if they share one way out. Ask of
+every shared component what the survivors lose when its zone goes. The database is still in one
+zone, on purpose.
+
 ---
 
 ## Template for new entries

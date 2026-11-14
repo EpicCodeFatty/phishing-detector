@@ -1,13 +1,16 @@
 """Tests for the demo traffic generator. No request leaves the machine: requests is faked."""
 
 import argparse
+import warnings
 
 import pytest
 import requests
+from urllib3.exceptions import InsecureRequestWarning
 
 from scripts import load
 
-URL = "http://alb.example"
+URL = "https://alb.example"
+TARGET = load.Target(URL)
 SAMPLES = [("first.eml", b"one"), ("second.eml", b"two")]
 
 
@@ -64,19 +67,29 @@ def answer_with(monkeypatch, response: FakeResponse) -> None:
 
 
 def test_send_reports_the_status_and_the_instance_that_answered(sent):
-    outcome = load.send("POST", URL + load.SCAN_PATH, SAMPLES[0])
+    outcome = load.send(TARGET, load.SCAN_PATH, SAMPLES[0])
 
     assert (outcome.status, outcome.served_by) == ("200", "i-0aaa")
 
 
 def test_send_uploads_the_sample_in_the_field_the_application_reads(sent):
-    load.send("POST", URL + load.SCAN_PATH, SAMPLES[0])
+    load.send(TARGET, load.SCAN_PATH, SAMPLES[0])
 
     assert sent[0]["files"] == {"file": SAMPLES[0]}
 
 
+def test_a_request_with_an_upload_is_a_post_and_one_without_is_a_get(sent):
+    load.send(TARGET, load.SCAN_PATH, SAMPLES[0])
+    load.send(TARGET, load.ERROR_PATH)
+
+    assert [(call["method"], call["url"]) for call in sent] == [
+        ("POST", URL + "/api/scan"),
+        ("GET", URL + "/simulate-error"),
+    ]
+
+
 def test_every_request_has_a_timeout(sent):
-    load.send("GET", URL + load.ERROR_PATH)
+    load.send(TARGET, load.ERROR_PATH)
 
     assert sent[0]["timeout"] == load.TIMEOUT_SECONDS
 
@@ -88,7 +101,7 @@ def test_a_failed_request_is_counted_under_the_error_name_not_raised(monkeypatch
 
     monkeypatch.setattr(load.requests, "request", fail)
 
-    outcome = load.send("GET", URL)
+    outcome = load.send(TARGET, load.ERROR_PATH)
 
     assert (outcome.status, outcome.served_by) == (error.__name__, None)
 
@@ -104,7 +117,7 @@ def test_a_failed_request_is_counted_under_the_error_name_not_raised(monkeypatch
 def test_an_answer_that_names_no_instance_reports_none(monkeypatch, body):
     answer_with(monkeypatch, FakeResponse(502, body))
 
-    outcome = load.send("GET", URL)
+    outcome = load.send(TARGET, load.ERROR_PATH)
 
     assert (outcome.status, outcome.served_by) == ("502", None)
 
@@ -112,7 +125,7 @@ def test_an_answer_that_names_no_instance_reports_none(monkeypatch, body):
 def test_scans_rotate_through_the_samples_until_the_time_is_up(sent, clock):
     options = argparse.Namespace(seconds=2, concurrency=1, rate=2)
 
-    outcomes = load.send_scans(URL, SAMPLES, options)
+    outcomes = load.send_scans(TARGET, SAMPLES, options)
 
     assert len(outcomes) == 4  # sent at 0, 0.5, 1 and 1.5 seconds
     assert [call["files"]["file"][0] for call in sent] == [
@@ -163,7 +176,7 @@ def test_all_threads_together_stay_under_the_rate(sent):
     # two turns, so rounding cannot let a seventh in. A pacer per thread would send 24.
     options = argparse.Namespace(seconds=0.275, concurrency=4, rate=20)
 
-    outcomes = load.send_scans(URL, SAMPLES, options)
+    outcomes = load.send_scans(TARGET, SAMPLES, options)
 
     assert 1 <= len(outcomes) <= 6
 
@@ -259,6 +272,53 @@ def test_default_mode_posts_the_repository_samples_and_prints_the_summary(sent, 
 
     assert exit_code == 0
     assert capsys.readouterr().out.startswith("requests sent: 2\nstatus:\n  200: 2\n")
+
+
+def test_certificates_are_verified_unless_insecure_is_given(sent, clock, capsys):
+    load.main(["--url", URL, "--errors", "1"])
+
+    assert sent[0]["verify"] is True
+    assert capsys.readouterr().err == ""
+
+
+def test_insecure_switches_verification_off_for_scans(sent, clock):
+    load.main(["--url", URL, "--seconds", "1", "--concurrency", "1", "--rate", "2", "--insecure"])
+
+    assert [call["verify"] for call in sent] == [False, False]
+
+
+def test_insecure_switches_verification_off_for_the_error_route(sent, clock):
+    load.main(["--url", URL, "--errors", "2", "--insecure"])
+
+    assert [call["verify"] for call in sent] == [False, False]
+
+
+def test_insecure_says_so_once_and_keeps_the_summary_clean(sent, clock, capsys):
+    load.main(["--url", URL, "--errors", "3", "--insecure"])
+
+    printed = capsys.readouterr()
+    assert printed.err == load.INSECURE_WARNING + "\n"
+    assert printed.out == "status codes: 200 200 200\n"
+
+
+def test_insecure_silences_the_http_librarys_warning_about_each_request(sent, clock):
+    with warnings.catch_warnings(record=True) as shown:
+        warnings.simplefilter("always")  # as urllib3 sets it: a warning for every request
+
+        load.main(["--url", URL, "--errors", "1", "--insecure"])
+        warnings.warn("Unverified HTTPS request", InsecureRequestWarning, stacklevel=1)
+
+    assert shown == []
+
+
+def test_without_insecure_the_http_librarys_warnings_are_left_alone(sent, clock):
+    with warnings.catch_warnings(record=True) as shown:
+        warnings.simplefilter("always")
+
+        load.main(["--url", URL, "--errors", "1"])
+        warnings.warn("Unverified HTTPS request", InsecureRequestWarning, stacklevel=1)
+
+    assert [warning.category for warning in shown] == [InsecureRequestWarning]
 
 
 def test_no_samples_is_an_error_with_a_message(sent, monkeypatch, tmp_path, capsys):

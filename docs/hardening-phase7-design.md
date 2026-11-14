@@ -339,7 +339,7 @@ a real deployment of a code change, the drill phase 5 left for later.
 After the refresh:
 
 ```powershell
-curl.exe -sI (terraform output -raw alb_url)
+curl.exe -skI (terraform output -raw alb_url)
 ```
 
 The four headers appear. Then, after a few minutes, the `rejected-traffic` saved query returns rows.

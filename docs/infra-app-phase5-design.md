@@ -576,7 +576,7 @@ a capacity timeout, go to section 9 and use debug mode; do not simply apply agai
 
 ```powershell
 $url = terraform output -raw alb_url
-1..6 | ForEach-Object { curl.exe -s "$url/health"; "" }
+1..6 | ForEach-Object { curl.exe -sk "$url/health"; "" }
 ```
 
 Expect both instance IDs and the same release on every line. Then, in a browser:
@@ -597,7 +597,7 @@ This is the live deploy for the review, so it is worth rehearsing now.
 3. Watch the rollout:
    ```powershell
    aws autoscaling describe-instance-refreshes --profile phishing --auto-scaling-group-name (terraform output -raw asg_name) --query "InstanceRefreshes[0].[Status,PercentageComplete]"
-   1..20 | ForEach-Object { curl.exe -s "$url/health"; ""; Start-Sleep 15 }
+   1..20 | ForEach-Object { curl.exe -sk "$url/health"; ""; Start-Sleep 15 }
    ```
    Within three or four minutes some answers carry the new release; after about eleven minutes all of
    them do, and no request fails. Run the loop longer if needed.

@@ -68,7 +68,7 @@ variable "instance_warmup_seconds" {
 
 variable "allowed_ingress_cidrs" {
   type        = list(string)
-  description = "IPv4 ranges allowed to reach the load balancer on port 80. One security group rule per entry."
+  description = "IPv4 ranges allowed to reach the load balancer, on port 443 and on port 80, which only redirects. One security group rule per entry and port."
   default     = ["0.0.0.0/0"]
 }
 

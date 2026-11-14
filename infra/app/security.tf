@@ -1,7 +1,7 @@
 # Three security groups in a chain, each admitting only the one before it:
 #
-#   alb-sg   in: 80 from var.allowed_ingress_cidrs    out: 8000 to app-sg
-#   app-sg   in: 8000 from alb-sg                     out: 443 to anywhere, 5432 to db-sg
+#   alb-sg   in: 443 and 80 from var.allowed_ingress_cidrs   out: 8000 to app-sg
+#   app-sg   in: 8000 from alb-sg                            out: 443 to anywhere, 5432 to db-sg
 #   db-sg    in: 5432 from app-sg (rule added here; the group is in infra/base)
 #
 # Port 22 appears nowhere. Shell access is through Session Manager, which works over the
@@ -29,7 +29,7 @@ locals {
 
 resource "aws_security_group" "alb" {
   name_prefix = "${var.project}-alb-"
-  description = "Load balancer. HTTP in from the internet, out to the application only."
+  description = "Load balancer. HTTPS and HTTP in from the internet, out to the application only."
   vpc_id      = local.base.vpc_id
 
   tags = {
@@ -42,13 +42,26 @@ resource "aws_security_group" "alb" {
 }
 
 # The service is public by design. The variable exists so that it can be narrowed to known
-# addresses without editing the rule.
-resource "aws_vpc_security_group_ingress_rule" "alb_http" {
-  #checkov:skip=CKV_AWS_260:A public web service by design; allowed_ingress_cidrs narrows it without editing the rule
+# addresses without editing the rules: one rule per range on each of the two ports.
+resource "aws_vpc_security_group_ingress_rule" "alb_https" {
   for_each = toset(var.allowed_ingress_cidrs)
 
   security_group_id = aws_security_group.alb.id
-  description       = "HTTP from the allowed address ranges"
+  description       = "HTTPS from the allowed address ranges"
+  ip_protocol       = "tcp"
+  from_port         = local.https_port
+  to_port           = local.https_port
+  cidr_ipv4         = each.value
+}
+
+# Kept open for one purpose: the listener on this port answers every request with a redirect
+# to HTTPS, so someone who types the address without https:// still arrives.
+resource "aws_vpc_security_group_ingress_rule" "alb_http" {
+  #checkov:skip=CKV_AWS_260:Port 80 only answers with a redirect to HTTPS; public by design, narrowed by allowed_ingress_cidrs
+  for_each = toset(var.allowed_ingress_cidrs)
+
+  security_group_id = aws_security_group.alb.id
+  description       = "HTTP from the allowed address ranges, answered with a redirect to HTTPS"
   ip_protocol       = "tcp"
   from_port         = local.http_port
   to_port           = local.http_port

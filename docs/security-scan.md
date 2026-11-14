@@ -18,6 +18,12 @@ Run on 13 November 2026, on Windows 10, against commit `d65fa80` plus the phase 
 
 Also used: Terraform 1.17.1, Python 3.12.10.
 
+**Updated on 14 November 2026**, on the branch `feature/https-nat`: the load balancer got an
+HTTPS listener with a self-signed certificate, port 80 became a redirect, and each availability
+zone got its own NAT gateway (`docs/bonus-https-nat-design.md`). checkov and bandit were run
+again with the same versions and commands; the checkov figures below are from that run. pip-audit
+and gitleaks were not run again, and their figures are from 13 November.
+
 - **gitleaks** was installed with `winget install Gitleaks.Gitleaks`. winget checks the download
   against its manifest's SHA-256, and that hash
   (`d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e`) was compared with the
@@ -30,15 +36,19 @@ Also used: Terraform 1.17.1, Python 3.12.10.
 
 | Tool | Findings | Fixed | Accepted | False positive | Left unexplained |
 |---|---|---|---|---|---|
-| checkov | 32 failed, 182 passed | 1 | 30 | 1 | 0 |
+| checkov | 32 | 4 | 27 | 1 | 0 |
 | bandit | 2 (both low severity) | 0 | 0 | 2 | 0 |
 | pip-audit | 0 known vulnerabilities in 28 pinned packages | 0 | 0 | 0 | 0 |
 | gitleaks | 0 in 10 commits, 0 in the working tree | 0 | 0 | 0 | 0 |
 
-Checkov was run after the fixes in section 3. Its one "fixed" finding is the VPC flow log: it is
-still reported in `infra/base`, because checkov reads one stack at a time and cannot see the flow
-log defined in `infra/app`. It is skipped there with that reason. After the inline skips, checkov
-reports **182 passed, 0 failed, 32 skipped**.
+The 32 are the findings of the phase 7 run, on 13 November. Three of them, all about plain
+HTTP, were accepted then and are fixed now that the load balancer has HTTPS (section 3); their
+skips are gone and the checks pass. Of the fixed findings, the VPC flow log is still reported in
+`infra/base`, because checkov reads one stack at a time and cannot see the flow log defined in
+`infra/app`. It is skipped there with that reason. The new resources (certificate, HTTPS
+listener, second NAT gateway and address, port 443 rule) produced no new finding. After the
+inline skips, checkov reports **196 passed, 0 failed, 29 skipped**: 27 accepted, the false
+positive, and the flow log in `infra/base`.
 
 Both bandit findings are false positives (section 5), each marked `# nosec B105` on its line with
 the reason. After that, bandit reports no issues and exits with code 0.
@@ -71,21 +81,30 @@ runs it against the live account:
 - **Instance timers tuned to the measured boot** (118 s): health-check grace period 180 s, refresh
   warm-up 240 s. `infra/app/variables.tf`.
 
+Fixed on 14 November, with HTTPS (`infra/app/alb.tf`, `tls.tf`, `security.tf`). All three were
+accepted in phase 7 for want of a certificate:
+
+- **The listener was HTTP** (checkov `CKV_AWS_2`): the load balancer now answers HTTPS on 443.
+  The check is that traffic between the user and the load balancer is encrypted; the risk was
+  that anyone on the network path could read or alter uploads and results.
+- **No TLS policy** (checkov `CKV_AWS_103`): the HTTPS listener uses
+  `ELBSecurityPolicy-TLS13-1-2-2021-06`, which offers TLS 1.3 and 1.2 and nothing older.
+- **No redirect from HTTP to HTTPS** (checkov `CKV2_AWS_20`): the listener on port 80 now answers
+  every request with a 301 to port 443.
+
+What the scanner does not see: the certificate is self-signed, because there is no domain. The
+encryption is real, the proof of identity is not, and a browser says so. The certificate's
+private key is in Terraform state, which is local and git-ignored. Production would use a
+certificate issued by ACM for a real domain, whose key never leaves AWS, and would add
+`Strict-Transport-Security`, which is left out here because with a self-signed certificate it
+would lock browsers out (README, Decisions).
+
 ## 4. Accepted
 
 One entry per finding: **the check**, **the risk** if it went wrong, **why it stays here**, and
 **what production would do**.
 
 ### Load balancer (`infra/app/alb.tf`)
-
-**`CKV_AWS_2`: the listener is HTTP, not HTTPS.** Also **`CKV_AWS_103`** (TLS 1.2 or later) and
-**`CKV2_AWS_20`** (redirect HTTP to HTTPS), which follow from it.
-- Check: traffic between the user and the load balancer should be encrypted.
-- Risk: anyone on the network path can read or alter uploads and results.
-- Why here: there is no domain, so no certificate can be issued. A TLS policy and a redirect only
-  exist for an HTTPS listener.
-- Production: a Route 53 record, an ACM certificate, an HTTPS listener with a modern TLS policy, and
-  port 80 kept only as a redirect.
 
 **`CKV_AWS_91`: no access logs.**
 - Check: the load balancer should log every request.
@@ -111,17 +130,20 @@ One entry per finding: **the check**, **the risk** if it went wrong, **why it st
 - Check: traffic from the load balancer to the instances should be encrypted too.
 - Risk: someone already inside the VPC could read it.
 - Why here: that traffic never leaves the VPC, and the instances admit port 8000 only from the
-  load balancer's security group. Encrypting it means certificates on every instance.
+  load balancer's security group. Encrypting it means certificates on every instance. TLS ends
+  at the load balancer, which now has it.
 - Production: usually the same, TLS ending at the load balancer. End-to-end TLS only where a
   compliance regime requires it.
 
 ### Network (`infra/app/security.tf`, `infra/base/network.tf`)
 
 **`CKV_AWS_260`: port 80 is open to `0.0.0.0/0`.**
-- Check: no security group should admit the whole internet.
+- Check: no security group should admit the whole internet on port 80.
 - Risk: anyone can reach the service and probe it. The flow log shows that they do.
-- Why here: it is a public web service. The `allowed_ingress_cidrs` variable narrows it without
-  editing the rule.
+- Why here: it is a public web service, and port 80 now only answers with a redirect to HTTPS, so
+  that an address typed without `https://` still arrives. Port 443 is open to the same ranges;
+  checkov has no finding for that. The `allowed_ingress_cidrs` variable narrows both without
+  editing the rules.
 - Production: the same for a public service, behind a WAF. Narrowed for an internal one.
 
 **`CKV_AWS_394`: the availability-zone lookup does not pin zone IDs.**
@@ -295,7 +317,8 @@ What these tools do not check, so a clean report does not claim it:
 
 - **Runtime behaviour.** Static analysis reads code and configuration. It does not see what the
   running service does, how it behaves under load, or whether a header actually reaches a browser.
-  That is checked by the tests and by `curl -sI` against the deployed service.
+  That is checked by the tests and by `curl -skI` against the deployed service (`-k`: the
+  certificate is self-signed).
 - **The AWS account outside Terraform.** The root user, MFA, other IAM users, CloudTrail, the
   budget, and service control policies from the project-based sign-up are not in the code, so no
   scanner here sees them.

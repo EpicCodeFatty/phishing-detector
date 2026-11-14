@@ -383,8 +383,8 @@ standard library plus `requests` (add it to `requirements-dev.txt` if it is not 
 application dependency).
 
 ```
-python scripts/load.py --url <alb_url> --seconds 120 --concurrency 4
-python scripts/load.py --url <alb_url> --errors 10
+python scripts/load.py --url <alb_url> --insecure --seconds 120 --concurrency 4
+python scripts/load.py --url <alb_url> --insecure --errors 10
 ```
 
 - Default mode: for the given duration, posts the files in `samples/` in rotation to `/api/scan` from a
@@ -444,14 +444,14 @@ it with me before applying.
 
 4. **Traffic.**
    ```powershell
-   python scripts\load.py --url (terraform output -raw alb_url) --seconds 180
+   python scripts\load.py --url (terraform output -raw alb_url) --insecure --seconds 180
    ```
    Open the dashboard (`terraform output -raw dashboard_url`). Requests, 2XX and response time fill
    in within two or three minutes.
 
 5. **The 5XX alarm.**
    ```powershell
-   python scripts\load.py --url (terraform output -raw alb_url) --errors 10
+   python scripts\load.py --url (terraform output -raw alb_url) --insecure --errors 10
    ```
    Within about two minutes `target-5xx` goes to ALARM and an email arrives. A few minutes later it
    returns to OK, and a second email says so.

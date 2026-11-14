@@ -1,5 +1,6 @@
 # The same Terraform and AWS provider as infra/base. This stack adds the archive provider,
-# which zips app/ into the release (artifact.tf). `terraform init` records the exact
+# which zips app/ into the release (artifact.tf), and the tls provider, which generates the
+# load balancer's self-signed certificate (tls.tf). `terraform init` records the exact
 # provider builds in .terraform.lock.hcl, which is committed; adding a provider means
 # running init once more and committing the updated lock file.
 
@@ -15,6 +16,11 @@ terraform {
     archive = {
       source  = "hashicorp/archive"
       version = "~> 2.7"
+    }
+
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.4"
     }
   }
 }

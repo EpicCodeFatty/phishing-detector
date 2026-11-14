@@ -7,6 +7,7 @@ from pathlib import Path
 import psycopg
 import pytest
 import werkzeug.formparser
+from flask import request, url_for
 from markupsafe import escape
 
 from app import config, db, web
@@ -38,6 +39,10 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "X-Frame-Options": "DENY",
 }
+
+# What the load balancer adds to a request it received over HTTPS, before passing it on to
+# the application as plain HTTP.
+FORWARDED_FROM_HTTPS = {"X-Forwarded-Proto": "https"}
 
 # Stored XSS: an email whose subject, sender display name, link text and link target carry
 # markup, uploaded under a filename that does too. Under tests/, not samples/: the samples
@@ -601,6 +606,44 @@ def test_a_header_the_response_sets_itself_is_kept(app):
 
     assert response.headers["Referrer-Policy"] == "same-origin"
     assert response.headers["X-Frame-Options"] == "DENY"
+
+
+def test_no_strict_transport_security_header_is_sent_even_over_https(client):
+    # The certificate is self-signed: with this header a browser would refuse the site
+    # instead of letting the user click through its warning.
+    response = client.get("/", headers=FORWARDED_FROM_HTTPS)
+
+    assert "Strict-Transport-Security" not in response.headers
+
+
+def test_a_request_the_load_balancer_received_over_https_is_seen_as_https(client):
+    with client:  # keeps the request in reach after the response has been returned
+        client.get("/health", headers=FORWARDED_FROM_HTTPS)
+
+        assert request.scheme == "https"
+
+
+def test_a_request_with_no_forwarded_scheme_is_seen_as_http(client):
+    with client:
+        client.get("/health")
+
+        assert request.scheme == "http"
+
+
+def test_an_absolute_url_built_during_an_https_request_uses_https(client):
+    with client:
+        client.get("/health", headers=FORWARDED_FROM_HTTPS)
+
+        assert url_for("pages.history", _external=True) == "https://localhost/history"
+
+
+def test_only_the_address_the_load_balancer_added_is_taken_as_the_client(client):
+    # The load balancer appends the address it saw to whatever X-Forwarded-For the client
+    # sent, so the last entry is the only one a client cannot forge.
+    with client:
+        client.get("/health", headers={"X-Forwarded-For": "203.0.113.9, 198.51.100.4"})
+
+        assert request.remote_addr == "198.51.100.4"
 
 
 def test_hostile_upload_keeps_its_filename_in_the_history(client, history: FakeHistory):

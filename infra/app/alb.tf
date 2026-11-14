@@ -1,10 +1,15 @@
-# The public entry point: an Application Load Balancer across both availability zones,
-# forwarding to the instances on the application port.
+# The public entry point: an Application Load Balancer across both availability zones. It
+# answers HTTPS on 443, where TLS ends, and forwards to the instances as plain HTTP on the
+# application port; port 80 only redirects to 443.
+
+locals {
+  # TLS 1.3 and 1.2 only: nothing older is offered to a client.
+  tls_policy = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+}
 
 resource "aws_lb" "main" {
   #checkov:skip=CKV_AWS_91:Access logs need an S3 bucket with an ELB delivery policy; ALB metrics and the app log answer the questions
   #checkov:skip=CKV_AWS_150:Deletion protection off on purpose; this stack is destroyed at the end of every working session
-  #checkov:skip=CKV2_AWS_20:No domain, so no certificate and no HTTPS listener to redirect to; HTTPS is a planned bonus
   #checkov:skip=CKV2_AWS_28:No WAF; about $5 a month plus per rule, and uploads are already capped at 5 MB by the app
   name               = "${var.project}-alb"
   load_balancer_type = "application"
@@ -52,17 +57,39 @@ resource "aws_lb_target_group" "app" {
   }
 }
 
-# Plain HTTP, deliberately: there is no domain for this project, so there is no certificate
-# to attach. With a domain this becomes an HTTPS listener, and this one a redirect to it.
+# Where TLS ends ("TLS termination"): the load balancer decrypts, and from here to the
+# instances the traffic is HTTP on the application port inside the VPC, as it always was. One
+# place holds the certificate, and the instances do not change. The health check is likewise
+# unchanged: HTTP, straight to the application port.
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = local.https_port
+  protocol          = "HTTPS"
+  ssl_policy        = local.tls_policy
+  certificate_arn   = aws_acm_certificate.alb.arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
+  }
+}
+
+# Port 80 stays open only to answer "use HTTPS instead": a 301 to the same host, path and
+# query on 443. A client that follows a 301 repeats a POST as a GET, so an upload sent here
+# uploads nothing: whatever posts (scripts/load.py, API callers) must be given the https://
+# address.
 resource "aws_lb_listener" "http" {
-  #checkov:skip=CKV_AWS_2:No domain for this exercise, so no certificate; HTTPS is a planned bonus
-  #checkov:skip=CKV_AWS_103:Same reason; a TLS policy applies only to HTTPS listeners
   load_balancer_arn = aws_lb.main.arn
   port              = local.http_port
   protocol          = "HTTP"
 
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.app.arn
+    type = "redirect"
+
+    redirect {
+      port        = tostring(local.https_port)
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
   }
 }

@@ -27,6 +27,7 @@ from flask import (
     request,
 )
 from werkzeug.exceptions import BadRequest, HTTPException, NotFound
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app import config, db
 from app.detector import analyze
@@ -60,6 +61,10 @@ SERVER_ERROR_MESSAGE = "Something went wrong on our side. Please try again in a 
 SERVER_ERROR = 500
 SERVICE_UNAVAILABLE = 503
 
+# How many proxies stand between a client and this application on EC2: the load balancer,
+# and nothing else. It is how many X-Forwarded-* values are believed, counted from the end.
+TRUSTED_PROXIES = 1
+
 # Event name for request lines whose route is unknown, such as a 404.
 UNROUTED_EVENT = "request"
 
@@ -68,7 +73,9 @@ UNROUTED_EVENT = "request"
 # hostile markup from an email ever got through, the browser would still refuse to run a
 # script or load anything from another origin. The policy allows files from this origin
 # only, so the templates may contain no inline <script>, <style> or style="" attribute.
-# No Strict-Transport-Security: the service is plain HTTP, where browsers ignore it.
+# No Strict-Transport-Security: the load balancer's certificate is self-signed, and with
+# that header a browser refuses the site outright instead of letting the user click through
+# its warning. With a trusted certificate the header would be added.
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
@@ -130,6 +137,14 @@ def create_app() -> Flask:
     app.register_error_handler(HTTPException, _handle_http_error)
     # The boundary for everything nobody anticipated: logged in full, shown generically.
     app.register_error_handler(Exception, _handle_unexpected_error)
+    # TLS ends at the load balancer, so every request arrives here as plain HTTP from the
+    # load balancer's own address. It passes on the scheme the client used and the client's
+    # address in X-Forwarded-Proto and X-Forwarded-For; ProxyFix applies them, so
+    # request.scheme is https and any absolute URL or redirect built here stays on HTTPS.
+    # Believing these headers is safe only because nothing but the load balancer can reach
+    # this port: the instances' security group admits the load balancer's group and no one
+    # else. Reachable directly, a client could claim any scheme or address it liked.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=TRUSTED_PROXIES, x_proto=TRUSTED_PROXIES)
     return app
 
 

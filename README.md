@@ -97,9 +97,10 @@ ones: each is fixed, accepted with its reason written next to the code, or shown
 positive. The full list, with what each check means, the risk, and what production would do, is in
 [docs/security-scan.md](docs/security-scan.md).
 
-- **checkov:** 32 findings. 1 fixed (VPC flow logs), 30 accepted, 1 false positive. Most of the
-  accepted ones trace back to three decisions: no domain (so HTTP only), a stack destroyed daily
-  (so no deletion protection, short log retention), and a demo-sized database.
+- **checkov:** 32 findings. 4 fixed (VPC flow logs, and the three about plain HTTP, which went
+  when the load balancer got HTTPS), 27 accepted, 1 false positive. Most of the accepted ones
+  trace back to two decisions: a stack destroyed daily (so no deletion protection, short log
+  retention), and a demo-sized database.
 - **bandit:** 2 low-severity false positives, both a variable name containing "password" or
   "token". No SQL is built from strings: every statement takes its values as parameters.
 - **pip-audit:** no known vulnerabilities in the 28 pinned packages.
@@ -110,7 +111,8 @@ Fixed in this pass:
 - **Security headers on every response:** a content security policy that allows only this
   origin's own files, plus `nosniff`, `no-referrer` and `X-Frame-Options: DENY`. It is the second
   layer behind template escaping: if hostile markup from an email ever got through, the browser
-  would still refuse to run it. No `Strict-Transport-Security`: browsers ignore it over plain HTTP.
+  would still refuse to run it. No `Strict-Transport-Security`, on purpose: see *HTTPS on the
+  load balancer*, under *Decisions*.
 - **Stored XSS is tested, not assumed:** an email with script and image tags in its subject, sender,
   links and filename is shown escaped on the result and history pages.
 - **Rejected traffic is logged:** a VPC flow log records every connection attempt the security
@@ -118,6 +120,9 @@ Fixed in this pass:
   balancer, and on which ports.
 - **`/simulate-error` is behind a switch:** see *Decisions*, below.
 - **A pre-push hook runs gitleaks** and blocks a push that contains a secret.
+
+Added afterwards: **HTTPS on the load balancer**, TLS 1.2 and 1.3 only, with port 80 answering
+only with a redirect. The certificate is self-signed; see *Decisions*.
 
 The hook lives in the repository, but where Git looks for hooks is local configuration and is not
 cloned. Once per clone:
@@ -181,24 +186,29 @@ expects, which suits a single operator and nothing larger. It also fixes the ord
 before `app` and destroyed after it. With a team, both states would live in an S3 backend and
 `terraform_remote_state` would read from there, with no other change.
 
-**EC2 instances in private subnets, egress through a NAT Gateway.**
+**EC2 instances in private subnets, egress through a NAT gateway in each availability zone.**
 The instances have no public IP and sit in private subnets with no route from the internet. The only
 inbound path is from the load balancer's security group, on port 8000. There are no network ACLs
-beyond the default.
-*Trade-off:* a NAT Gateway costs roughly $1.10/day. A single NAT (in one AZ) is used rather than one
-per AZ: if that AZ fails, the instance in the other AZ still serves traffic through the ALB but cannot
-reach S3, Secrets Manager or CloudWatch, and a replacement instance cannot boot. In production this
-would be one NAT per AZ.
+beyond the default. Outbound, each private subnet's route table points at the NAT gateway in its own
+zone. If a zone fails, the instance in the other zone keeps its way out: it still reaches S3, Secrets
+Manager, CloudWatch and Session Manager, and a replacement instance can still boot. The project
+started with one gateway for both zones, to save cost; an availability review found that the
+surviving instance would then have kept serving but could not have healed (see `BUILD_LOG.md`).
+*Trade-off:* each NAT gateway costs roughly $1.10/day, plus about $0.12/day for its public address,
+while the stack runs. What is still in one zone is the database: RDS is single-AZ, because Multi-AZ
+doubles its cost and provisioning time, and a database outage degrades the service rather than
+stopping it (see the RDS entry below).
 
-**A NAT Gateway rather than VPC endpoints.**
+**NAT gateways rather than VPC endpoints.**
 In production the instances would reach AWS services through VPC endpoints instead: interface endpoints
 for Session Manager, Secrets Manager, CloudWatch Logs and CloudWatch metrics, and a gateway endpoint for
 S3. That traffic would then never leave the AWS network, and the instances would need no route to the
 internet at all, which is the more secure pattern.
 *Trade-off:* interface endpoints are billed per endpoint, per availability zone, per hour, and the
-handful this project needs, in two zones, costs more than the single NAT. They would also not remove the
-NAT: the instances install their Python dependencies from PyPI at boot, which no endpoint reaches. For a
-four-day project the NAT is the cheaper way to the same working system.
+handful this project needs, in two zones, costs at least as much as the two NAT gateways. They would
+also not remove the gateways: the instances install their Python dependencies from PyPI at boot, which
+no endpoint reaches. For a four-day project the NAT gateways are the simpler way to the same working
+system.
 
 **Auto Scaling Group with min = max = desired = 2, one instance per AZ, `health_check_type = "ELB"`.**
 This gives self-healing with no code: a failing instance is replaced automatically, which can be
@@ -208,7 +218,8 @@ replaced before it can be inspected. During development the health check type is
 instances survive long enough to investigate.
 
 **Chained security groups.**
-`alb-sg` accepts :80 from the internet. `app-sg` accepts :8000 only from `alb-sg`. `db-sg` accepts
+`alb-sg` accepts :443 from the internet, and :80 only to redirect to it. `app-sg` accepts :8000 only
+from `alb-sg`. `db-sg` accepts
 :5432 only from `app-sg`. No security group admits traffic from a CIDR range except the load balancer's
 listener, and port 22 is not open anywhere. Outbound, the instances are allowed :443 to the internet,
 which is required for the AWS APIs and the package repositories.
@@ -256,10 +267,27 @@ exactly that: one bucket prefix, one secret ARN.
 *Trade-off:* the managed policies are broader than this project uses, and AWS can change them without
 anything changing in this repository.
 
-**HTTP only, no TLS.**
-There is no domain for this exercise, so there is no ACM certificate to attach to the listener.
-*Trade-off:* traffic is unencrypted. With a domain, this would be a Route 53 record, an ACM
-certificate, and an HTTPS listener with a redirect from :80.
+**HTTPS on the load balancer, with a self-signed certificate.**
+The load balancer answers HTTPS on :443, with TLS 1.2 and 1.3 only, and :80 answers every request
+with a 301 redirect to it. TLS ends at the load balancer: from there to the instances the traffic is
+plain HTTP on :8000 inside the VPC, as before, so one place holds the certificate and the instances
+did not change. There is no domain for this exercise, so no authority will issue a certificate.
+Terraform generates a self-signed one, naming the load balancer's DNS name, and imports it into ACM.
+The encryption is the same as with a trusted certificate; what is missing is proof of identity. So a
+browser warns before showing the site (Advanced, then Continue), `curl` needs `-k`, and
+`scripts/load.py` needs `--insecure`.
+*Trade-offs:*
+- **The certificate's private key is stored in Terraform state.** State is local and git-ignored, so
+  the key never reaches git, but this is a demo trade-off. In production the certificate is issued by
+  ACM against a real domain, and its private key never leaves AWS.
+- **No `Strict-Transport-Security` header.** With a self-signed certificate, HSTS would make browsers
+  refuse the site instead of letting the user click through the warning. With a real certificate,
+  HSTS would be added.
+- **A redirected POST becomes a GET.** Anything that uploads must be given the `https://` address
+  (`terraform output -raw alb_url`); an upload posted to :80 is redirected and uploads nothing.
+
+With a domain, this would be a Route 53 record and an ACM-issued certificate on the same two
+listeners.
 
 **Scans are viewable by id without authentication** (`/scans/<id>`), which is no new exposure because
 `/history` already lists every scan publicly; a production deployment would require sign-in for both.
@@ -349,6 +377,19 @@ deployment runs.
 Small instance types throughout (`t3.micro`, `db.t4g.micro`). `infra/app` is destroyed at the end of
 each working day, so only RDS runs overnight at roughly $0.40/day. An AWS Budget with email alerts was
 created manually, outside Terraform, so that it survives `terraform destroy`.
+
+While `infra/app` runs:
+
+| | per day |
+|---|---|
+| 2 NAT gateways, one per zone | ~$2.20 |
+| Load balancer | ~$0.60 |
+| 2 × t3.micro | ~$0.50 |
+| Public IPv4 addresses (two NAT gateways, two load balancer nodes) | ~$0.47 |
+| **`infra/app`, running** | **~$3.77** |
+
+The second NAT gateway and its address are about $1.22 of that: the price of each zone having its own
+way out. The certificate costs nothing.
 
 ---
 

@@ -211,11 +211,19 @@ resource "aws_autoscaling_group" "app" {
   }
 
   # Instances start running user_data within seconds of launch. Nothing in this resource
-  # refers to the NAT route, the security group rules or the role's policies, so without
+  # refers to the NAT routes, the security group rules or the role's policies, so without
   # this Terraform creates them in parallel, and the first boot runs `dnf install` before
   # there is a way out, or asks for a release it may not read yet, fails once, and is never
   # retried. The database rules are here so the application's first connection finds them.
+  # aws_route.private_app_nat names the resource, so it covers the route of every zone.
+  #
+  # The HTTPS listener is here for a different reason. It is the only thing that attaches
+  # the target group to the load balancer, and a target group attached to nothing never
+  # reports a healthy target. If the certificate or the listener failed to create, the group
+  # would wait out its capacity timeout and be tainted; with this, it is not created at all,
+  # and the apply stops on the real error.
   depends_on = [
+    aws_lb_listener.https,
     aws_route.private_app_nat,
     aws_vpc_security_group_egress_rule.app_https,
     aws_vpc_security_group_egress_rule.app_to_db,

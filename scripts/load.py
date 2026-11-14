@@ -1,7 +1,7 @@
 """Traffic generator for the monitoring demo: it fills the dashboard and trips the 5XX alarm.
 
-    python scripts/load.py --url <alb_url> --seconds 120 --concurrency 4 --rate 5
-    python scripts/load.py --url <alb_url> --errors 10
+    python scripts/load.py --url <alb_url> --insecure --seconds 120 --concurrency 4 --rate 5
+    python scripts/load.py --url <alb_url> --insecure --errors 10
 
 By default it posts the files in samples/ in rotation to /api/scan, then prints requests
 sent, a count per status and per served_by, and p50/p95 latency. With --errors it requests
@@ -9,6 +9,11 @@ sent, a count per status and per served_by, and p50/p95 latency. With --errors i
 simulation switched on (ENABLE_ERROR_SIMULATION); a 404 is reported as the switch being off,
 with exit code 1, never as errors sent. In both modes requests are paced to stay under
 --rate requests a second, counted across all threads together (default 5).
+
+Give it the https:// address. Port 80 only redirects to HTTPS, and a redirected POST arrives
+as a GET, so nothing would be uploaded. The load balancer's certificate is self-signed, so
+verification fails and every request is counted as SSLError unless --insecure is given, which
+switches verification off and says so once. Without it, certificates are verified.
 
 A demonstration tool, not a load test: a failed request is counted, never raised and never
 retried, because the point is to see failures.
@@ -25,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import requests
+import urllib3
+from urllib3.exceptions import InsecureRequestWarning
 
 SAMPLES_DIRECTORY = Path(__file__).resolve().parent.parent / "samples"
 SCAN_PATH = "/api/scan"
@@ -45,8 +52,20 @@ SWITCHED_OFF_MESSAGE = (
     "error simulation is off on the server: /simulate-error answered 404, so no 5XX was "
     "produced. Apply infra/app with enable_error_simulation = true."
 )
+INSECURE_WARNING = (
+    "warning: --insecure: the server's certificate is not verified. Meant only for this "
+    "project's self-signed certificate."
+)
 
 type Sample = tuple[str, bytes]  # a file's name and content, as requests takes an upload
+
+
+@dataclass(frozen=True)
+class Target:
+    """The service the requests go to."""
+
+    url: str  # without a trailing slash
+    verify: bool = True  # False accepts a certificate that no authority signed: --insecure
 
 
 @dataclass(frozen=True)
@@ -84,9 +103,14 @@ class Pacer:
 def main(arguments: list[str] | None = None) -> int:
     """Run the generator from the command line and return the process's exit code."""
     options = _parse(arguments)
-    url = options.url.rstrip("/")
+    target = Target(options.url.rstrip("/"), verify=not options.insecure)
+    if options.insecure:
+        print(INSECURE_WARNING, file=sys.stderr)
+        # urllib3 warns about every unverified request: one line per request, where the
+        # line above says it once.
+        urllib3.disable_warnings(InsecureRequestWarning)
     if options.errors:
-        outcomes = send_errors(url, options)
+        outcomes = send_errors(target, options)
         print("status codes:", " ".join(outcome.status for outcome in outcomes))
         if any(outcome.status == SWITCHED_OFF_STATUS for outcome in outcomes):
             print(SWITCHED_OFF_MESSAGE)
@@ -96,7 +120,7 @@ def main(arguments: list[str] | None = None) -> int:
     if not samples:
         print(f"No sample files in {SAMPLES_DIRECTORY}", file=sys.stderr)
         return 1
-    print(summarise(send_scans(url, samples, options)))
+    print(summarise(send_scans(target, samples, options)))
     return 0
 
 
@@ -109,17 +133,17 @@ def read_samples(directory: Path) -> list[Sample]:
     return [(path.name, path.read_bytes()) for path in files]
 
 
-def send_errors(url: str, options: argparse.Namespace) -> list[Outcome]:
+def send_errors(target: Target, options: argparse.Namespace) -> list[Outcome]:
     """Request the deliberate error options.errors times, at no more than options.rate a second."""
     pacer = Pacer(options.rate)
     outcomes = []
     for _ in range(options.errors):
         pacer.wait()
-        outcomes.append(send("GET", url + ERROR_PATH))
+        outcomes.append(send(target, ERROR_PATH))
     return outcomes
 
 
-def send_scans(url: str, samples: list[Sample], options: argparse.Namespace) -> list[Outcome]:
+def send_scans(target: Target, samples: list[Sample], options: argparse.Namespace) -> list[Outcome]:
     """Post the samples in rotation from options.concurrency threads for options.seconds.
 
     The threads share one pacer, so together they send no more than options.rate a second.
@@ -132,7 +156,7 @@ def send_scans(url: str, samples: list[Sample], options: argparse.Namespace) -> 
         outcomes = []
         while pacer.wait(deadline):
             sample = samples[(first + len(outcomes)) % len(samples)]
-            outcomes.append(send("POST", url + SCAN_PATH, sample))
+            outcomes.append(send(target, SCAN_PATH, sample))
         return outcomes
 
     with ThreadPoolExecutor(max_workers=options.concurrency) as pool:
@@ -140,12 +164,17 @@ def send_scans(url: str, samples: list[Sample], options: argparse.Namespace) -> 
     return [outcome for batch in batches for outcome in batch]
 
 
-def send(method: str, url: str, upload: Sample | None = None) -> Outcome:
-    """Send one request and report how it went. A failure is an outcome, never an exception."""
-    files = {UPLOAD_FIELD: upload} if upload else None
+def send(target: Target, path: str, upload: Sample | None = None) -> Outcome:
+    """Send one request and report how it went. A failure is an outcome, never an exception.
+
+    The request is a POST of the upload when there is one, and a GET otherwise.
+    """
+    method, files = ("POST", {UPLOAD_FIELD: upload}) if upload else ("GET", None)
     started = time.perf_counter()
     try:
-        response = requests.request(method, url, files=files, timeout=TIMEOUT_SECONDS)
+        response = requests.request(
+            method, target.url + path, files=files, timeout=TIMEOUT_SECONDS, verify=target.verify
+        )
     except requests.RequestException as error:
         return Outcome(type(error).__name__, None, time.perf_counter() - started)
     return Outcome(str(response.status_code), _served_by(response), time.perf_counter() - started)
@@ -188,6 +217,11 @@ def _parse(arguments: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--rate", type=float, default=DEFAULT_RATE, help="most requests a second")
     parser.add_argument("--errors", type=int, default=0, help="send this many /simulate-error")
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="do not verify the server's certificate: for the self-signed one on the load balancer",
+    )
     options = parser.parse_args(arguments)
     if min(options.seconds, options.concurrency) < 1 or options.errors < 0 or options.rate <= 0:
         parser.error(
