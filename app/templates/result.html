@@ -4,7 +4,8 @@
 
   Receives:
     result: Result         the engine's verdict, score, decided_by, findings and category_scores
-    filename: str          as uploaded; attacker-controlled, like every string from the email
+    filename: str          as uploaded, or "pasted-email.txt"; attacker-controlled, like every
+                           string from the email
     sender: str            the raw From header, '' when the input had no headers
     subject: str           '' when the input had no headers
     served_by: str         identifier of the instance that ran the scan: its EC2 instance ID
@@ -14,75 +15,163 @@
     cache_hit: bool        True when the result was reused from the cache rather than analysed
     seen: int | None       times this exact email was scanned in the last 24 hours, this scan
                            included; None when not known (a stored scan) or when it is the first
+    first_sighting: bool   True when the count is known and this is the first time
+    severity_counts: dict[str, int]    findings per severity, most severe first, none at zero
+    categories: list[CategoryView]     every category in the engine's order, each with its
+                                       findings (most severe first) and points
+    points_total: int      the points of all categories together
 -#}
 {% extends "base.html" %}
 
-{% block title %}{{ result.verdict }}: {{ filename }}{% endblock %}
+{% block title %}Scan — {{ filename }}{% endblock %}
 
 {% block content %}
-{% if not saved %}
-<p class="notice notice-warning" role="status">
-  This scan could not be saved to the history. The result below is complete.
-</p>
-{% endif %}
-
-<section class="verdict verdict-{{ result.verdict | lower }}" aria-label="Verdict">
-  <p class="verdict-label">{{ result.verdict }}</p>
-  <p class="verdict-score">Score {{ result.score }}/100</p>
-  <p class="verdict-reason">Decided by {{ result.decided_by }}</p>
-</section>
-
-{% if seen %}
-<p class="notice notice-info sightings" role="status">Seen {{ seen }} times in the last 24 hours</p>
-{% endif %}
-
-<dl class="scan-details">
-  <dt>File</dt>
-  <dd>{{ filename }}</dd>
-  <dt>From</dt>
-  <dd>{{ sender or "(none)" }}</dd>
-  <dt>Subject</dt>
-  <dd>{{ subject or "(none)" }}</dd>
-  <dt>Served by</dt>
-  <dd class="served-by">{{ served_by }}</dd>
-  {% if scan_id is not none %}
-  <dt>Scan</dt>
-  <dd>#{{ scan_id }}</dd>
-  {% endif %}
-  {% if cache_hit %}
-  <dt>Analysis</dt>
-  <dd class="cache-note">Served from cache (scanned before; result reused)</dd>
-  {% endif %}
-  {% if scanned_at %}
-  <dt>Scanned at</dt>
-  <dd class="timestamp">{{ scanned_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC</dd>
-  {% endif %}
-</dl>
-
-<h2>Findings</h2>
-{#- category_scores lists the categories in the engine's order: links, sender, wording, attachments. #}
-{% for category, category_score in result.category_scores.items() %}
-<section class="finding-group">
-  <h3>{{ category | capitalize }} <span class="category-score">{{ category_score }} points</span></h3>
-  <ul class="findings">
-    {% for found in result.findings if found.category == category %}
-    <li class="finding finding-{{ found.severity }}">
-      <span class="severity">{{ found.severity }}</span>
-      <p class="finding-reason">{{ found.reason }}</p>
-      {% if found.evidence %}
-      <p class="finding-evidence"><code>{{ found.evidence }}</code></p>
-      {% endif %}
-    </li>
-    {% endfor %}
-  </ul>
-</section>
-{% else %}
-<p class="empty">No phishing indicators were found.</p>
-{% endfor %}
-
+{%- set verdict = result.verdict | lower %}
+{%- set total = result.findings | length %}
+<div class="page-head">
+<div class="page-head__text">
+<h1 class="title-h1 heading-file"><span class="heading-file__label">Scan —</span><span class="heading-file__name" title="{{ filename }}">{{ filename }}</span></h1>
 {% if scanned_at %}
-<p class="next-action"><a href="{{ url_for('pages.history') }}">Back to history</a></p>
-{% else %}
-<p class="next-action"><a href="{{ url_for('pages.upload_form') }}">Scan another email</a></p>
+<p class="meta-line">Scanned at <time datetime="{{ scanned_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ scanned_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC</time></p>
 {% endif %}
+{% if cache_hit %}
+<p class="meta-line meta-line--info"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5"></path></svg>Served from cache — scanned before, result reused.</p>
+{% endif %}
+</div>
+<div class="page-head__actions">
+{% if scanned_at %}
+<a class="btn btn--secondary" href="{{ url_for('pages.history') }}">Back to history</a>
+{% else %}
+<a class="btn btn--secondary" href="{{ url_for('pages.upload_form') }}">Scan another email</a>
+{% endif %}
+</div>
+</div>
+
+{% if not saved %}
+{#- Dismissed without JavaScript: the checkbox hides the banner for this page view only. #}
+<input class="banner-toggle" type="checkbox" id="dismiss-banner" aria-label="Dismiss the warning">
+<div class="banner" role="status">
+<svg class="banner__icon" aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+<p class="banner__text">This scan could not be saved to history. The result below is complete.</p>
+<label class="banner__close" for="dismiss-banner"><span class="visually-hidden">Dismiss</span><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"></path><path d="M6 6l12 12"></path></svg></label>
+</div>
+{% endif %}
+
+<div class="bento result-top">
+
+<section class="card card--lg verdict verdict--{{ verdict }} span-6 row-2" aria-labelledby="verdict-label">
+<div class="card__head">
+<h2 class="card__title" id="verdict-label">Verdict</h2>
+<span class="tile tile--lg tile--{{ verdict }}" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+{%- if verdict == "phishing" %}<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86"></polygon><path d="M15 9l-6 6"></path><path d="M9 9l6 6"></path>
+{%- elif verdict == "suspicious" %}<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path>
+{%- else %}<circle cx="12" cy="12" r="9"></circle><path d="m8 12 3 3 5-6"></path>
+{%- endif %}</svg></span>
+</div>
+<div>
+<p class="verdict__word">{{ result.verdict }}</p>
+<p class="verdict__summary">
+{%- if total == 0 %}No findings
+{%- else %}{{ total }} {{ "finding" if total == 1 else "findings" }}: {% for severity, count in severity_counts.items() %}{{ count }} {{ severity }}{{ ", " if not loop.last }}{% endfor %}
+{%- endif %}</p>
+</div>
+</section>
+
+<section class="card card--lime stat span-3" aria-labelledby="score-label">
+<div class="card__head">
+<h2 class="card__label" id="score-label">Score</h2>
+<span class="tile" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M4 9h16"></path><path d="M4 15h16"></path><path d="M10 3 8 21"></path><path d="M16 3l-2 18"></path></svg></span>
+</div>
+<div>
+<p class="stat__value">{{ result.score }}<span class="stat__unit"> / 100</span></p>
+<p class="stat__note muted">Decided by {{ result.decided_by }}</p>
+</div>
+</section>
+
+<section class="card card--lime stat span-3" aria-labelledby="seen-label">
+<div class="card__head">
+<h2 class="card__label" id="seen-label">Seen</h2>
+<span class="tile" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"></path><path d="M3 11v-1a4 4 0 0 1 4-4h14"></path><path d="m7 22-4-4 4-4"></path><path d="M21 13v1a4 4 0 0 1-4 4H3"></path></svg></span>
+</div>
+<div>
+{% if seen %}
+<p class="stat__value">{{ seen }}×</p>
+<p class="stat__note muted">Times this email was scanned in the last 24 hours</p>
+{% elif first_sighting %}
+<p class="stat__value">New</p>
+<p class="stat__note muted">First time seen</p>
+{% else %}
+<p class="stat__value">—</p>
+<p class="stat__note muted">Count not available</p>
+{% endif %}
+</div>
+</section>
+
+<section class="card served span-6" aria-labelledby="served-label">
+<span class="tile" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"></rect><rect x="3" y="13" width="18" height="7" rx="2"></rect><path d="M7 7.5h.01M7 16.5h.01"></path></svg></span>
+<div class="served__text">
+<h2 class="small muted" id="served-label">Served by</h2>
+<p class="served__id">{{ served_by }}</p>
+</div>
+</section>
+
+</div>
+
+<section class="card email-strip" aria-labelledby="email-label">
+<h2 class="card__title" id="email-label">Email</h2>
+<dl>
+<div>
+<dt>From</dt>
+<dd class="address">{{ sender or "(none)" }}</dd>
+</div>
+<div>
+<dt>Subject</dt>
+<dd>{{ subject or "(none)" }}</dd>
+</div>
+</dl>
+</section>
+
+<div class="section-head">
+<h2 class="section-head__title">Findings</h2>
+<p class="muted">{{ total }} {{ "finding" if total == 1 else "findings" }} · {{ points_total }} points</p>
+</div>
+
+{#- The stylesheet gives the category blocks their 7 and 5 column spans by position. #}
+<div class="bento findings-grid">
+{% for category in categories %}
+{%- set count = category.findings | length %}
+<section class="card category" aria-labelledby="cat-{{ category.name }}">
+<div class="card__head">
+<div>
+<h3 class="card__title" id="cat-{{ category.name }}">{{ category.name | capitalize }}</h3>
+<p class="card__sub">{{ count }} {{ "finding" if count == 1 else "findings" }}</p>
+</div>
+<p class="points{{ ' points--zero' if category.points == 0 }}">{{ category.points }}<span class="points__unit">pts</span></p>
+</div>
+{% if category.findings %}
+<ul class="findings">
+{% for found in category.findings %}
+<li class="finding finding--{{ found.severity }}">
+<div class="finding__top"><span class="pill pill--{{ found.severity }}">{{ found.severity | capitalize }}</span><span class="finding__pts">+{{ found.weight }} pts</span></div>
+<p>{{ found.reason }}</p>
+{% if found.evidence %}
+<code class="evidence">{{ found.evidence }}</code>
+{% endif %}
+</li>
+{% endfor %}
+</ul>
+{% else %}
+<p class="empty-note">Nothing found in this category.</p>
+{% endif %}
+</section>
+{% endfor %}
+</div>
+
+<div class="actions-row">
+{% if scanned_at %}
+<a class="btn btn--secondary" href="{{ url_for('pages.history') }}">Back to history</a>
+{% else %}
+<a class="btn btn--secondary" href="{{ url_for('pages.upload_form') }}">Scan another email</a>
+{% endif %}
+</div>
 {% endblock %}

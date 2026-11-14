@@ -59,9 +59,10 @@ FORWARDED_FROM_HTTPS = {"X-Forwarded-Proto": "https"}
 # are a verdict corpus, and scripts/load.py uploads every one of them.
 XSS_FIXTURE = Path(__file__).parent / "fixtures" / "xss-subject.eml"
 HOSTILE_FILENAME = '"><img src=x onerror=alert(1)>.eml'
-# No tag may open on the page. "onerror=" itself is harmless once the "<img" before it is
-# escaped: it is then text, not an attribute, so it is not what these look for.
-RAW_MARKUP = ("<script", "<img")
+# The hostile tags may not open on the page. "onerror=" itself is harmless once the "<img"
+# before it is escaped: it is then text, not an attribute, so it is not what these look for.
+# "<img src=x" rather than "<img": the header's logo is an image of the page's own.
+RAW_MARKUP = ("<script", "<img src=x")
 ESCAPED_MARKUP = ("&lt;script&gt;alert(1)&lt;/script&gt;", "&lt;img src=x onerror=alert(1)&gt;")
 
 
@@ -100,8 +101,8 @@ def test_scan_of_a_safe_sample_says_so(client):
     response = client.post("/scan", data=sample_upload("team-lunch.eml"))
 
     page = response.get_data(as_text=True)
-    assert "verdict-safe" in page
-    assert "No phishing indicators were found." in page
+    assert "verdict--safe" in page
+    assert '<p class="verdict__summary">No findings</p>' in page
 
 
 def test_scan_result_shows_which_instance_served_it(ec2_client):
@@ -115,7 +116,7 @@ def test_scan_without_a_file_returns_400(client, data):
     response = client.post("/scan", data=data)
 
     assert response.status_code == 400
-    assert "Choose an email file" in response.get_data(as_text=True)
+    assert "Choose an email file or paste the raw email" in response.get_data(as_text=True)
 
 
 def test_scan_of_an_empty_file_is_analysed(client):
@@ -342,7 +343,7 @@ def test_history_links_each_file_name_to_its_scan(client):
 
     page = client.get("/history").get_data(as_text=True)
 
-    assert '<a href="/scans/1">paypal-phish.eml</a>' in page
+    assert '<a class="row-link" href="/scans/1">paypal-phish.eml</a>' in page
 
 
 def test_scan_detail_shows_the_stored_verdict_findings_and_instance(ec2_client, history):
@@ -353,8 +354,8 @@ def test_scan_detail_shows_the_stored_verdict_findings_and_instance(ec2_client, 
 
     page = response.get_data(as_text=True)
     assert response.status_code == 200
-    assert "verdict-phishing" in page
-    assert f"Score {record.score}/100" in page
+    assert "verdict--phishing" in page
+    assert f'<p class="stat__value">{record.score}<span class="stat__unit"> / 100</span>' in page
     assert [
         found.reason for found in record.findings if str(escape(found.reason)) not in page
     ] == []
@@ -364,7 +365,7 @@ def test_scan_detail_shows_the_stored_verdict_findings_and_instance(ec2_client, 
 def test_scan_detail_gives_the_findings_and_category_points_of_the_original_result(client):
     # The category points are not stored: the detail page works them out again.
     def findings_section(page: str) -> str:
-        return page[page.index("<h2>Findings</h2>") : page.index('<p class="next-action">')]
+        return page[page.index("Findings</h2>") : page.index('<div class="actions-row">')]
 
     result_page = client.post("/scan", data=sample_upload("paypal-phish.eml"))
 
@@ -383,7 +384,7 @@ def test_scan_detail_says_when_it_was_scanned_and_leads_back_to_the_history(clie
 
     assert "Scanned at" in page
     assert record.created_at.strftime("%Y-%m-%d %H:%M:%S") + " UTC" in page
-    assert '<a href="/history">Back to history</a>' in page
+    assert '<a class="btn btn--secondary" href="/history">Back to history</a>' in page
     assert "Scan another email" not in page
     assert SAVE_WARNING not in page
 
@@ -404,7 +405,7 @@ def test_scan_detail_of_an_unknown_or_malformed_id_is_a_404(client, path):
     response = client.get(path)
 
     assert response.status_code == 404
-    assert "There is no page at this address." in response.get_data(as_text=True)
+    assert "This page does not exist." in response.get_data(as_text=True)
 
 
 def test_scan_detail_returns_503_when_the_database_is_unavailable(client, monkeypatch):
@@ -500,7 +501,7 @@ def test_oversized_upload_is_rejected_with_413(client):
     response = client.post("/scan", data=upload_of(too_large, "huge.eml"))
 
     assert response.status_code == 413
-    assert "5 MB limit" in response.get_data(as_text=True)
+    assert "larger than 5 MB" in response.get_data(as_text=True)
 
 
 def test_upload_limit_comes_from_the_configuration(isolated_config, history, monkeypatch):
@@ -510,7 +511,9 @@ def test_upload_limit_comes_from_the_configuration(isolated_config, history, mon
     response = client.post("/api/scan", data=upload_of(b"x" * (1024 * 1024 + 1), "a.eml"))
 
     assert response.status_code == 413
-    assert response.get_json() == {"error": "The file is larger than the 1 MB limit."}
+    assert response.get_json() == {
+        "error": "The file is larger than 1 MB. Upload a smaller file or paste the raw email."
+    }
 
 
 def test_uploaded_file_is_never_written_to_disk(client, monkeypatch):
@@ -541,7 +544,7 @@ def test_simulate_error_is_a_plain_404_when_switched_off(client):
     response = client.get("/simulate-error")
 
     assert response.status_code == 404
-    assert "There is no page at this address." in response.get_data(as_text=True)
+    assert "This page does not exist." in response.get_data(as_text=True)
 
 
 def test_switched_off_simulation_raises_nothing(client, caplog):
@@ -564,7 +567,7 @@ def test_unknown_page_returns_a_friendly_404(client):
     response = client.get("/no-such-page")
 
     assert response.status_code == 404
-    assert "There is no page at this address." in response.get_data(as_text=True)
+    assert "This page does not exist." in response.get_data(as_text=True)
 
 
 def test_wrong_method_returns_405(client):
@@ -587,7 +590,7 @@ def test_content_from_the_email_is_escaped(client):
 
     page = response.get_data(as_text=True)
     assert "<script>" not in page
-    assert "<img" not in page
+    assert "<img src=x" not in page
     assert "<b>name</b>" not in page
     assert "&lt;script&gt;" in page
     assert "&lt;b&gt;name&lt;/b&gt;" in page
@@ -771,8 +774,10 @@ def _client():
 #
 # The valkey fixture switches the cache on, against an in-memory fake (conftest.py).
 
-SEEN_TWICE = "Seen 2 times in the last 24 hours"
-FROM_CACHE = "Served from cache (scanned before; result reused)"
+SEEN_TWICE = '<p class="stat__value">2×</p>'
+SEEN_FIRST = '<p class="stat__value">New</p>'
+COUNT_UNKNOWN = "Count not available"
+FROM_CACHE = "Served from cache — scanned before, result reused."
 CACHE_WARNING = "cache_unavailable"
 
 
@@ -781,7 +786,7 @@ def scan_lines(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
 
 
 def findings_part(page: str) -> str:
-    return page[page.index("<h2>Findings</h2>") : page.index('<p class="next-action">')]
+    return page[page.index("Findings</h2>") : page.index('<div class="actions-row">')]
 
 
 @pytest.fixture
@@ -859,11 +864,19 @@ def test_the_file_name_and_instance_come_from_the_request_not_the_cache(
     assert (cached.filename, cached.served_by) == ("forwarded-again.eml", "i-0bbbbbbbbbbbbbbbb")
 
 
-def test_the_first_scan_shows_no_count_and_no_cache_line(valkey, client):
+def test_the_first_scan_says_it_is_new_and_shows_no_cache_line(valkey, client):
     page = client.post("/scan", data=sample_upload("paypal-phish.eml")).get_data(as_text=True)
 
-    assert "Seen " not in page
+    assert SEEN_FIRST in page
+    assert "×</p>" not in page
     assert FROM_CACHE not in page
+
+
+def test_without_a_count_the_page_says_it_is_not_available(client):
+    page = client.post("/scan", data=sample_upload("paypal-phish.eml")).get_data(as_text=True)
+
+    assert COUNT_UNKNOWN in page
+    assert SEEN_FIRST not in page
 
 
 def test_the_second_scan_shows_its_count_and_that_it_came_from_the_cache(valkey, client):
@@ -899,7 +912,8 @@ def test_the_detail_page_of_a_cached_scan_says_so_but_shows_no_count(valkey, cli
     page = client.get("/scans/2").get_data(as_text=True)
 
     assert FROM_CACHE in page
-    assert "Seen " not in page
+    assert COUNT_UNKNOWN in page
+    assert SEEN_TWICE not in page
 
 
 def test_the_history_marks_scans_served_from_the_cache(valkey, client):
@@ -908,7 +922,7 @@ def test_the_history_marks_scans_served_from_the_cache(valkey, client):
 
     page = client.get("/history").get_data(as_text=True)
 
-    assert page.count('class="cache-tag"') == 1
+    assert page.count('<span class="cached">cached</span>') == 1
 
 
 def test_the_scan_log_line_says_how_the_cache_took_part(valkey, client, caplog):
@@ -1081,3 +1095,104 @@ def test_health_answers_throughout_a_database_outage(database_down, monkeypatch)
     # Startup; the first scan falls inside the first wait and makes none; then one attempt
     # each time a wait has passed.
     assert len(database_down) == 3
+
+
+# ------------------------------------------------------------------- Pasted raw email
+#
+# The Scan page's second form posts the raw email as text, in the field raw_email. /scan
+# takes the file or the text, exactly one, and scans text exactly as it would a file.
+
+PASTED_SAMPLE = (SAMPLES / "paypal-phish.eml").read_text(encoding="utf-8")
+FIVE_MEGABYTES = 5 * 1024 * 1024
+
+
+def paste(text: str) -> dict[str, object]:
+    """Return test-client arguments that paste the text as the Scan page's second form does.
+
+    That form is multipart, like the file form; a plain dict would be sent urlencoded.
+    """
+    return {"data": {"raw_email": text}, "content_type": "multipart/form-data"}
+
+
+def test_a_pasted_email_is_scanned(client):
+    response = client.post("/scan", **paste(PASTED_SAMPLE))
+
+    assert response.status_code == 200
+    assert "verdict--phishing" in response.get_data(as_text=True)
+
+
+def test_a_pasted_email_gets_the_verdict_its_file_gets(client):
+    as_file = client.post("/api/scan", data=sample_upload("paypal-phish.eml")).get_json()
+
+    as_text = client.post("/api/scan", **paste(PASTED_SAMPLE)).get_json()
+
+    for field in ("score", "verdict", "decided_by", "findings"):
+        assert as_text[field] == as_file[field]
+
+
+def test_a_pasted_email_is_saved_as_pasted_email_txt(client, history):
+    client.post("/scan", **paste(PASTED_SAMPLE))
+
+    (record,) = history.records
+    assert record.filename == "pasted-email.txt"
+    assert record.sender == history.records[0].sender
+
+
+def test_pasted_text_is_scanned_as_its_utf8_bytes(valkey, client):
+    # The same email as a file and as text has the same bytes, and so the same cache key.
+    text = "From: Zoë <zoe@example.org>\nSubject: Café, naïve, 東京\n\nBonjour.\n"
+    client.post("/scan", **paste(text))
+
+    response = client.post("/api/scan", data=upload_of(text.encode("utf-8"), "same.eml"))
+
+    assert response.get_json()["cache_hit"] is True
+
+
+@pytest.mark.parametrize("text", ["", "   \r\n\t "], ids=["empty", "only whitespace"])
+def test_an_empty_paste_is_a_400_page(client, text):
+    response = client.post("/scan", **paste(text))
+
+    assert response.status_code == 400
+    assert "Nothing to scan" in response.get_data(as_text=True)
+
+
+def test_a_file_and_a_paste_together_are_a_400_page(client, history):
+    data = sample_upload("paypal-phish.eml") | {"raw_email": PASTED_SAMPLE}
+
+    response = client.post("/scan", data=data)
+
+    assert response.status_code == 400
+    assert "one of the two, not both" in response.get_data(as_text=True)
+    assert history.records == []
+
+
+def test_an_empty_file_input_beside_a_paste_counts_as_no_file(client):
+    # The browser sends the file field empty when no file was chosen in that form.
+    data = upload_of(b"", "") | {"raw_email": PASTED_SAMPLE}
+
+    response = client.post("/scan", data=data)
+
+    assert response.status_code == 200
+
+
+def test_an_oversized_paste_is_rejected_with_413(client):
+    response = client.post("/scan", **paste("x" * (FIVE_MEGABYTES + 1)))
+
+    assert response.status_code == 413
+    assert "larger than 5 MB" in response.get_data(as_text=True)
+
+
+def test_a_paste_well_over_werkzeugs_own_form_limit_is_accepted(client):
+    # Werkzeug refuses a text field over 500 KB by default; the limit must be the upload's.
+    text = PASTED_SAMPLE + "\n" + "a" * (2 * 1024 * 1024)
+
+    response = client.post("/scan", **paste(text))
+
+    assert response.status_code == 200
+
+
+def test_the_api_accepts_a_pasted_email_too(client):
+    response = client.post("/api/scan", **paste(PASTED_SAMPLE))
+
+    assert response.status_code == 200
+    assert response.get_json()["verdict"] == "Phishing"

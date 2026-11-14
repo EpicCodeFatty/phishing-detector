@@ -1,6 +1,7 @@
-# Phishing Email Detector on AWS
+# Fish Scan: a phishing email detector on AWS
 
-A Python service that analyzes an email file, scores it for phishing indicators, and returns a verdict.
+Fish Scan is a Python service that analyzes an email file, scores it for phishing indicators, and
+returns a verdict.
 Deployed on AWS with Terraform: a frontend and backend running on two EC2 instances behind an
 Application Load Balancer, with scan history stored in RDS PostgreSQL and an optional result cache,
 shared by both instances, on ElastiCache (Valkey).
@@ -11,7 +12,15 @@ shared by both instances, on ElastiCache (Valkey).
 
 ## 1. Overview
 
-TODO — what the service does, in a few sentences.
+Fish Scan takes an email, as an uploaded `.eml` or `.txt` file or pasted as raw text, and says
+whether it is Safe, Suspicious or Phishing, with the evidence behind the verdict: links whose text
+and target disagree, lookalike sender domains, pressure wording, dangerous attachments. Every scan
+is kept in a history, and an email seen before is answered from a shared cache with a count of how
+often it has been seen. TODO: the rest of the overview.
+
+The product is called Fish Scan; the repository and every technical identifier keep the original
+name, `phishing-detector`: the Terraform resources, the log groups, the dashboard and the `Project`
+tag.
 
 ## 2. Architecture
 

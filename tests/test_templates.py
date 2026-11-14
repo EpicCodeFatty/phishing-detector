@@ -88,9 +88,13 @@ def test_every_page_template_documents_what_it_receives():
             "scanned_at",
             "cache_hit",
             "seen",
+            "first_sighting",
+            "severity_counts",
+            "categories",
+            "points_total",
         },
-        "history.html": {"scans"},
-        "error.html": {"status", "message"},
+        "history.html": {"scans", "senders"},
+        "error.html": {"status", "title", "message"},
     }
 
 

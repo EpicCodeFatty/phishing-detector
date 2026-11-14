@@ -1,16 +1,30 @@
 {#-
   Receives:
     status: int     the HTTP status code
+    title: str      what went wrong, in a few words: "Page not found"
     message: str    a friendly explanation; never a stack trace or an internal detail
 -#}
 {% extends "base.html" %}
 
-{% block title %}Error {{ status }}{% endblock %}
+{% block title %}{{ title }}{% endblock %}
 
 {% block content %}
-<section class="error" aria-labelledby="error-heading">
-  <p class="error-status">Error {{ status }}</p>
-  <h1 id="error-heading">{{ message }}</h1>
-  <p class="next-action"><a href="{{ url_for('pages.upload_form') }}">Back to the scanner</a></p>
+<div class="bento page-pad">
+
+<section class="card card--lg error-code-card span-7">
+<p class="card__label muted">Error</p>
+<h1 class="error-code"><span class="visually-hidden">Error </span>{{ status }}</h1>
 </section>
+
+<section class="card card--lg error-message span-5" aria-labelledby="error-title">
+<div class="error-message__body">
+<h2 class="card__title" id="error-title">{{ title }}</h2>
+<p class="error-message__text">{{ message }}</p>
+</div>
+<div>
+<a class="btn btn--secondary" href="{{ url_for('pages.upload_form') }}">Back to Scan</a>
+</div>
+</section>
+
+</div>
 {% endblock %}

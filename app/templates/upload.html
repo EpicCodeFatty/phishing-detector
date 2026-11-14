@@ -1,21 +1,94 @@
 {#-
+  The Scan page: two forms, both posting to /scan. The first uploads a file (field "file"),
+  the second sends the raw email pasted as text (field "raw_email"); /scan takes exactly one.
+
   Receives:
-    max_mb: int    the upload size limit, in megabytes
+    max_mb: int    the upload size limit, in megabytes; it applies to pasted text too
 -#}
 {% extends "base.html" %}
 
 {% block title %}Scan an email{% endblock %}
 
 {% block content %}
-<h1>Scan an email</h1>
-<p class="lead">
-  Upload an email saved as an <code>.eml</code> file, or a text file containing the message.
-  The limit is {{ max_mb }} MB.
-</p>
+<div class="page-head">
+<div class="page-head__text">
+<h1 class="title-xl">Scan an <span class="accent">email</span></h1>
+<p class="lead">Upload an .eml or .txt file, or paste the raw message. The result shows the verdict and the evidence behind it.</p>
+</div>
+</div>
 
-<form class="upload-form" action="{{ url_for('pages.scan') }}" method="post" enctype="multipart/form-data">
-  <label for="file">Email file</label>
-  <input id="file" name="file" type="file" accept=".eml,.txt,message/rfc822,text/plain" required>
-  <button type="submit">Scan</button>
+<div class="bento">
+
+<form class="card upload span-7 row-2" action="{{ url_for('pages.scan') }}" method="post" enctype="multipart/form-data">
+<div class="card__head">
+<h2 class="card__title">Upload a file</h2>
+</div>
+
+{#- The file input covers the whole drop zone: click or drop anywhere. Once a file is chosen
+    the input is :valid, and the stylesheet switches the zone to its "File selected" face. #}
+<div class="dropzone">
+<input class="dropzone__input" id="email-file" name="file" type="file" accept=".eml,.txt,message/rfc822,text/plain" required aria-describedby="email-file-hint">
+<label class="dropzone__face" for="email-file">
+<span class="dropzone__prompt">
+<span class="tile tile--lg" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"></path><path d="m7 9 5-5 5 5"></path><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"></path></svg></span>
+<span>
+<span class="dropzone__big">Drop the email file here</span>
+<span class="dropzone__line muted">or click to choose it</span>
+</span>
+</span>
+<span class="dropzone__ready">
+<span class="tile tile--lg tile--lime" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>
+<span>
+<span class="dropzone__big">File selected</span>
+<span class="dropzone__line muted">Press Scan to analyse it, or drop another file to replace it.</span>
+</span>
+</span>
+</label>
+</div>
+
+<div class="card__foot">
+<p class="small muted" id="email-file-hint">Accepted: <span class="mono">.eml</span>, <span class="mono">.txt</span> · Maximum {{ max_mb }} MB</p>
+<button class="btn btn--primary" type="submit">Scan</button>
+</div>
 </form>
+
+{#- Reserved for the hero animation, as delivered. It stays empty: the static drawing is the
+    .hero-slot background in style.css. #}
+<div class="hero-slot span-5" aria-hidden="true"></div>
+
+<section class="card span-5" aria-labelledby="facts-title">
+<h2 class="card__title" id="facts-title">How scans are handled</h2>
+<ul class="facts card__end">
+<li class="fact">
+<span class="tile" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"></rect><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"></path></svg></span>
+<span>Analysed in memory</span>
+</li>
+<li class="fact">
+<span class="tile" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></span>
+<span>Nothing stored but the verdict</span>
+</li>
+<li class="fact">
+<span class="tile" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"></rect><rect x="3" y="13" width="18" height="7" rx="2"></rect><path d="M7 7.5h.01M7 16.5h.01"></path></svg></span>
+<span>Two servers, either can answer</span>
+</li>
+</ul>
+</section>
+
+{#- multipart, like the file form: a urlencoded body would percent-encode the text, up to three
+    times its size, and the size limit would then bite well below max_mb. #}
+<form class="card span-12" action="{{ url_for('pages.scan') }}" method="post" enctype="multipart/form-data">
+<div class="card__head">
+<div>
+<h2 class="card__title"><label for="raw-email">or paste the raw email</label></h2>
+<p class="card__sub">Headers and body, as plain text</p>
+</div>
+</div>
+<textarea class="textarea" id="raw-email" name="raw_email" rows="12" spellcheck="false" autocomplete="off" required aria-describedby="raw-email-hint" placeholder="Received: from mail.example.net (203.0.113.10)&#10;From: &quot;Sender&quot; &lt;sender@example.net&gt;&#10;Subject: …&#10;&#10;Message body…"></textarea>
+<div class="card__foot">
+<p class="small muted" id="raw-email-hint">Maximum {{ max_mb }} MB of text</p>
+<button class="btn btn--secondary" type="submit">Scan</button>
+</div>
+</form>
+
+</div>
 {% endblock %}

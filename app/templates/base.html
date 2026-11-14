@@ -1,33 +1,47 @@
 {#-
-  The shared frame of every page: head, stylesheet, header with navigation, footer.
-  Pages extend this template and fill two blocks: title and content.
+  The shared frame of every page: head, stylesheet, header with logo and navigation, footer.
+  Pages extend this template and fill two blocks: title and content. The title block holds
+  the page's own name only; " · Fish Scan" is added here, and with the block empty the title
+  is "Fish Scan".
   Restyling the application means editing this file and static/style.css only.
+
+  Receives, on every page, from the web layer's context processor:
+    nav_section: str | None    "scan" or "history": the navigation link marked as current;
+                               None on error pages
 -#}
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}{% endblock %} | Phishing Detector</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{% endblock %}{% if self.title() %} · {% endif %}Fish Scan</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/favicon.svg') }}">
+<link rel="preload" href="{{ url_for('static', filename='fonts/manrope-400.woff2') }}" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <header class="site-header">
-    <a class="site-name" href="{{ url_for('pages.upload_form') }}">Phishing Detector</a>
-    <nav class="site-nav" aria-label="Main">
-      {%- for endpoint, label in [("pages.upload_form", "Scan"), ("pages.history", "History")] %}
-      <a href="{{ url_for(endpoint) }}"
-         {%- if request.endpoint == endpoint %} aria-current="page"{% endif %}>{{ label }}</a>
-      {%- endfor %}
-    </nav>
-  </header>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="shell">
 
-  <main class="page">
-    {% block content %}{% endblock %}
-  </main>
+<header class="site-header">
+<a class="wordmark" href="{{ url_for('pages.upload_form') }}"><img src="{{ url_for('static', filename='img/fishscan-logo.svg') }}" alt="Fish Scan" width="143" height="32"></a>
+<nav aria-label="Main">
+<ul class="nav__list">
+{%- for section, endpoint, label in [("scan", "pages.upload_form", "Scan"), ("history", "pages.history", "History")] %}
+<li><a class="nav__link" href="{{ url_for(endpoint) }}"{% if nav_section == section %} aria-current="page"{% endif %}>{{ label }}</a></li>
+{%- endfor %}
+</ul>
+</nav>
+</header>
 
-  <footer class="site-footer">
-    Uploaded files are analysed in memory and never stored. Only the verdict and its findings are kept.
-  </footer>
+<main class="main" id="main">
+{% block content %}{% endblock %}
+</main>
+
+<footer class="site-footer">
+<p>Uploaded files are analysed in memory and never stored. Only the verdict and its findings are kept.</p>
+</footer>
+
+</div>
 </body>
 </html>

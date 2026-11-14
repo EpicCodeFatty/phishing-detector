@@ -198,8 +198,10 @@ At this traffic level — a handful of scans in a demo — a pool is optimisatio
 introduces connections that can go stale across an RDS failover. The trade-off is recorded in the README,
 and `psycopg_pool` is a two-line change if load ever justified it.
 
-Set a short connect timeout (`connect_timeout=5`). The default waits long enough that a database
-problem looks like a hung page.
+Set a short connect timeout (`connect_timeout=3`). The default waits long enough that a database
+problem looks like a hung page. A circuit breaker backs it (`docs/drills-phase8-design.md`,
+section 2): after a failed connection each process refuses database calls at once for 15 seconds,
+then lets one attempt through, so a database that is down cannot tie up both workers.
 
 ### Operations
 
@@ -229,7 +231,7 @@ def db_is_reachable() -> bool                     # for diagnostics only, never 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/` | Upload form |
-| POST | `/scan` | Analyze an uploaded file, save it, render the result |
+| POST | `/scan` | Analyze an uploaded file or a pasted email, save it, render the result |
 | GET | `/history` | The most recent scans |
 | GET | `/scans/<id>` | One stored scan in full; 404 for an unknown id |
 | POST | `/api/scan` | Same as `/scan`, returns JSON |
@@ -387,10 +389,33 @@ page can be read without opening `web.py`:
 
 | Template | Receives |
 |---|---|
+| `base.html` | `nav_section: str \| None`, on every page, from the web layer's context processor |
 | `upload.html` | `max_mb: int` |
-| `result.html` | `result: Result`, `filename: str`, `sender: str`, `subject: str`, `served_by: str`, `saved: bool`, `scan_id: int \| None`, `scanned_at: datetime \| None`, `cache_hit: bool`, `seen: int \| None` |
-| `history.html` | `scans: list[ScanRecord]` (each with `cache_hit`) |
-| `error.html` | `status: int`, `message: str` |
+| `result.html` | `result: Result`, `filename: str`, `sender: str`, `subject: str`, `served_by: str`, `saved: bool`, `scan_id: int \| None`, `scanned_at: datetime \| None`, `cache_hit: bool`, `seen: int \| None`, `first_sighting: bool`, `severity_counts: dict[str, int]`, `categories: list[CategoryView]`, `points_total: int` |
+| `history.html` | `scans: list[ScanRecord]` (each with `cache_hit`), `senders: dict[int, SenderView]` |
+| `error.html` | `status: int`, `title: str`, `message: str` |
+
+**What the design needs is worked out in the web layer, never in a template.** The result page's
+verdict card summarises the findings per severity (`severity_counts`: most severe first, none at
+zero), the findings section shows a block for every category, with or without findings
+(`categories`, each a `CategoryView` of name, findings and points, in the engine's order), and its
+heading gives the points of all categories together (`points_total`). The Seen card shows the count
+from 2 up, "New" when `first_sighting`, and "Count not available" otherwise: on a stored scan, or
+when the cache is off or down. The history splits each From header into the display name and the
+address (`senders`, keyed by scan id; a header that does not parse is shown whole). Error pages
+carry a short `title` as well as the message. `nav_section` marks the current navigation link:
+Scan for `/` and a fresh result, History for `/history` and `/scans/<id>`, none on error pages.
+
+**The product is called Fish Scan.** Every page's title is "<page> · Fish Scan", or "Fish Scan"
+when the title block is empty; the header shows the logo (`static/img/fishscan-logo.svg`) linking
+to the Scan page, and the favicon is its tile alone (`static/img/favicon.svg`).
+
+**The Scan page has two forms, both posting to `/scan`:** a file (`file`) and the raw email pasted
+as text (`raw_email`). `/scan` takes exactly one: neither or both is a 400. Pasted text is encoded as
+UTF-8 and scanned exactly like a file, and the history calls it `pasted-email.txt`. Both forms are
+`multipart/form-data`, so pasted text is not percent-encoded on the way, and `MAX_CONTENT_LENGTH`
+applies to both; `MAX_FORM_MEMORY_SIZE` is set to the same value, because Werkzeug would otherwise
+refuse a text field over 500 KB.
 
 A redesign that keeps this contract is a pure markup change. Keep the table in this document in step
 with the code.
@@ -403,15 +428,18 @@ engine again: the web layer rebuilds the `Result`, so the template receives the 
 way and there is no second result template to keep in step.
 
 **`cache_hit` and `seen` come from the result cache.** `cache_hit` is true when the result was
-reused from the cache rather than analysed; the page then says, quietly, "Served from cache (scanned
-before; result reused)", on the result page and on the detail page of such a scan alike. `seen` is
-how many times this exact email was scanned in the last 24 hours, this scan included. The web layer
-passes it only when it is 2 or more, and never on the detail page, where it is not known; the page
-then says "Seen N times in the last 24 hours". In the history, a scan served from the cache has a
-small `cached` marker beside its file name.
+reused from the cache rather than analysed; the page then says "Served from cache — scanned before,
+result reused.", on the result page and on the detail page of such a scan alike. `seen` is how many
+times this exact email was scanned in the last 24 hours, this scan included. The web layer passes it
+only when it is 2 or more, and never on the detail page, where it is not known; the Seen card then
+shows "N×". In the history, a scan served from the cache is marked `cached` in its own column.
 
 **Fonts, scripts and styles must be files under `static/`: nothing loaded from a CDN, no inline
-`<script>`, no `<style>` block, no `style=""` attribute.** Every response carries a content security
+`<script>`, no `<style>` block, no `style=""` attribute.** The design keeps to it: `static/style.css`,
+the Manrope fonts in `static/fonts/` with their licence, and the images in `static/img/`, all
+referred to with `url_for('static', ...)`; inside the stylesheet, `url()` paths are relative to the
+stylesheet itself. `tests/test_design.py` renders every page in every state and fails on any
+script, style, inline event handler or address on another origin. Every response carries a content security
 policy that allows only this origin's own files (`default-src 'self'`, added in phase 7), so the
 browser refuses anything else, and a redesign that breaks this rule produces a page the browser
 silently declines to style or run.
@@ -434,13 +462,19 @@ a broken layout.
 
 ### 7.5 The pages
 
-- **`upload.html`** — a file input and a submit button. States the accepted formats and the size limit.
-- **`result.html`** — the verdict large and colour-coded, the score, `decided_by`, and the findings
-  grouped by category with severity shown. Each finding shows its reason and evidence. Also the
+The pages follow the approved design (a dark bento layout, delivered as static HTML and kept out of
+git in `design-handoff/`).
+
+- **`upload.html`** — the Scan page: a drop zone for a file, a form to paste the raw email, the
+  "how scans are handled" facts, and the hero slot, an empty block kept for an animation, hidden
+  from assistive technology. States the accepted formats and the size limit.
+- **`result.html`** — the verdict large and colour-coded with a summary per severity, the score and
+  `decided_by`, the Seen count, `served_by`, the sender and subject, and a block per category with
+  its points and findings. Each finding shows its severity, points, reason and evidence. Also the
   detail page of a stored scan, with the time it was scanned.
-- **`history.html`** — a table: time, filename, sender, verdict, score, and `served_by`. Most recent
-  first. Each file name links to that scan's detail page.
-- **`error.html`** — a generic friendly error page. No stack traces.
+- **`history.html`** — a table: time, filename, sender, verdict, score, `served_by` and whether the
+  result came from the cache. Most recent first. The whole row links to that scan's detail page.
+- **`error.html`** — the status code large, a short title and a friendly message. No stack traces.
 
 **Keep `served_by` visible on both the result and the history pages, through any redesign.** It looks
 like an unimportant technical detail, and it is the only thing in the interface that demonstrates the

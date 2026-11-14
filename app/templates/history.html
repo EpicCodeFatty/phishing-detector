@@ -2,45 +2,82 @@
   Receives:
     scans: list[ScanRecord]    most recent first; created_at is in UTC; cache_hit marks a
                                result reused from the cache
+    senders: dict[int, SenderView]    each scan's From header by scan id, split into the
+                                      display name and the address
 -#}
 {% extends "base.html" %}
 
-{% block title %}History{% endblock %}
+{% block title %}Scan history{% endblock %}
 
 {% block content %}
-<h1>Scan history</h1>
+{%- set count = scans | length %}
+<div class="page-head">
+<div class="page-head__text">
+<h1 class="title-xl">Scan <span class="accent">history</span></h1>
+{% if scans %}
+<p class="lead">{{ count }} most recent {{ "scan" if count == 1 else "scans" }}</p>
+{% endif %}
+</div>
+</div>
 
 {% if scans %}
-<div class="table-scroll">
-  <table class="history">
-    <thead>
-      <tr>
-        <th scope="col">Time (UTC)</th>
-        <th scope="col">File</th>
-        <th scope="col">From</th>
-        <th scope="col">Verdict</th>
-        <th scope="col" class="numeric">Score</th>
-        <th scope="col">Served by</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for scan in scans %}
-      <tr>
-        <td class="timestamp">{{ scan.created_at.strftime("%Y-%m-%d %H:%M:%S") if scan.created_at }}</td>
-        <td>
-          <a href="{{ url_for('pages.scan_view', scan_id=scan.id) }}">{{ scan.filename }}</a>
-          {% if scan.cache_hit %}<span class="cache-tag" title="Result reused from the cache">cached</span>{% endif %}
-        </td>
-        <td>{{ scan.sender or "(none)" }}</td>
-        <td><span class="verdict-tag verdict-{{ scan.verdict | lower }}">{{ scan.verdict }}</span></td>
-        <td class="numeric">{{ scan.score }}</td>
-        <td class="served-by">{{ scan.served_by }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<section class="card table-card" aria-labelledby="table-title">
+<div class="card__head">
+<div>
+<h2 class="card__title" id="table-title">Recent scans</h2>
+<p class="card__sub">Newest first · times in UTC</p>
 </div>
+</div>
+<div class="table-wrap">
+<table class="table">
+<caption class="visually-hidden">Recent scans, newest first. Select a file name to open its result.</caption>
+<colgroup>
+<col class="col-time"><col class="col-file"><col class="col-sender"><col class="col-verdict"><col class="col-score"><col class="col-served"><col class="col-cached"><col class="col-view">
+</colgroup>
+<thead>
+<tr>
+<th scope="col">Time (UTC)</th>
+<th scope="col">File</th>
+<th scope="col">Sender</th>
+<th scope="col">Verdict</th>
+<th scope="col" class="num">Score</th>
+<th scope="col">Served by</th>
+<th scope="col">Cache</th>
+<th scope="col"><span class="visually-hidden">Open</span></th>
+</tr>
+</thead>
+<tbody>
+{#- The file link stretches over the whole row: the row is the link to /scans/<id>. #}
+{% for scan in scans %}
+{%- set who = senders[scan.id] %}
+{%- set verdict = scan.verdict | lower %}
+<tr>
+<td class="td-time">{% if scan.created_at %}<time datetime="{{ scan.created_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ scan.created_at.strftime("%Y-%m-%d %H:%M") }}</time>{% endif %}</td>
+<td class="td-file" title="{{ scan.filename }}"><a class="row-link" href="{{ url_for('pages.scan_view', scan_id=scan.id) }}">{{ scan.filename }}</a></td>
+<td class="td-sender" title="{{ scan.sender or '' }}">
+{%- if who.name and who.address %}{{ who.name }} <span class="sender__addr">&lt;{{ who.address }}&gt;</span>
+{%- elif who.name or who.address %}{{ who.name or who.address }}
+{%- else %}(none)
+{%- endif %}</td>
+<td class="td-verdict"><span class="pill pill--{{ verdict }}"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+{%- if verdict == "phishing" %}<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86"></polygon><path d="M15 9l-6 6"></path><path d="M9 9l6 6"></path>
+{%- elif verdict == "suspicious" %}<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path>
+{%- else %}<circle cx="12" cy="12" r="9"></circle><path d="m8 12 3 3 5-6"></path>
+{%- endif %}</svg>{{ scan.verdict }}</span></td>
+<td class="td-score num">{{ scan.score }}</td>
+<td class="td-served"><span class="server-id">{{ scan.served_by }}</span></td>
+<td class="td-cached">{% if scan.cache_hit %}<span class="cached">cached</span>{% else %}<span class="visually-hidden">no</span>{% endif %}</td>
+<td class="td-view"><span class="view" aria-hidden="true">View</span></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+</section>
 {% else %}
-<p class="empty">No scans yet. <a href="{{ url_for('pages.upload_form') }}">Scan an email</a> to start the history.</p>
+<section class="card empty" aria-labelledby="empty-title">
+<p class="card__title" id="empty-title">No scans yet.</p>
+<a class="btn btn--primary" href="{{ url_for('pages.upload_form') }}">Scan an email</a>
+</section>
 {% endif %}
 {% endblock %}

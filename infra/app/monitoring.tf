@@ -630,7 +630,7 @@ resource "aws_cloudwatch_metric_alarm" "elb_5xx" {
 # five-minute periods: sustained load, not a spike.
 resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   alarm_name        = "${var.project}-cpu-high"
-  alarm_description = "Average CPU across the instances has been above 80% for ten minutes. Check the request count on the dashboard for a surge, and the CPU credit balance: an instance out of credits is throttled."
+  alarm_description = "Average CPU across the instances has been above 80% for ten minutes. Check the request count on the dashboard for a surge, and the CPU credit balance: with unlimited credits an instance that runs out is not throttled, and the surplus is billed."
 
   namespace   = "AWS/EC2"
   metric_name = "CPUUtilization"
