@@ -71,7 +71,7 @@ resource "aws_launch_template" "app" {
 
   # The default for t3 is "unlimited", which silently bills for burst credits.
   credit_specification {
-    cpu_credits = "standard"
+    cpu_credits = "unlimited"
   }
 
   # default_tags does not reach what an Auto Scaling Group launches: the provider tags the
