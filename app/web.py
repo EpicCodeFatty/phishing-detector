@@ -443,7 +443,7 @@ def _result_page(outcome: ScanOutcome) -> str:
     pages it is drawing. seen is passed on only from MIN_SIGHTINGS_SHOWN up, and
     first_sighting says the count is known and is one; with neither, it is not known.
     The rest is worked out here so the template only displays it: the findings per
-    severity, a block per category, and the points of all categories together.
+    severity, and a block per category.
     """
     record = outcome.record
     result = outcome.result
@@ -463,7 +463,6 @@ def _result_page(outcome: ScanOutcome) -> str:
         first_sighting=seen == 1,
         severity_counts=_severity_counts(result.findings),
         categories=_categories(result),
-        points_total=sum(result.category_scores.values()),
     )
 
 

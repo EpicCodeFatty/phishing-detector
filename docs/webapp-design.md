@@ -391,7 +391,7 @@ page can be read without opening `web.py`:
 |---|---|
 | `base.html` | `nav_section: str \| None`, on every page, from the web layer's context processor |
 | `upload.html` | `max_mb: int` |
-| `result.html` | `result: Result`, `filename: str`, `sender: str`, `subject: str`, `served_by: str`, `saved: bool`, `scan_id: int \| None`, `scanned_at: datetime \| None`, `cache_hit: bool`, `seen: int \| None`, `first_sighting: bool`, `severity_counts: dict[str, int]`, `categories: list[CategoryView]`, `points_total: int` |
+| `result.html` | `result: Result`, `filename: str`, `sender: str`, `subject: str`, `served_by: str`, `saved: bool`, `scan_id: int \| None`, `scanned_at: datetime \| None`, `cache_hit: bool`, `seen: int \| None`, `first_sighting: bool`, `severity_counts: dict[str, int]`, `categories: list[CategoryView]` |
 | `history.html` | `scans: list[ScanRecord]` (each with `cache_hit`), `senders: dict[int, SenderView]` |
 | `error.html` | `status: int`, `title: str`, `message: str` |
 
@@ -399,7 +399,8 @@ page can be read without opening `web.py`:
 verdict card summarises the findings per severity (`severity_counts`: most severe first, none at
 zero), the findings section shows a block for every category, with or without findings
 (`categories`, each a `CategoryView` of name, findings and points, in the engine's order), and its
-heading gives the points of all categories together (`points_total`). The Seen card shows the count
+heading gives the number of findings only: the categories' points are summed before the score's cap
+of 100, so a total beside the score would read as a second, larger score. The Seen card shows the count
 from 2 up, "New" when `first_sighting`, and "Count not available" otherwise: on a stored scan, or
 when the cache is off or down. The history splits each From header into the display name and the
 address (`senders`, keyed by scan id; a header that does not parse is shown whole). Error pages

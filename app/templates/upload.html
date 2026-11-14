@@ -52,9 +52,51 @@
 </div>
 </form>
 
-{#- Reserved for the hero animation, as delivered. It stays empty: the static drawing is the
-    .hero-slot background in style.css. #}
-<div class="hero-slot span-5" aria-hidden="true"></div>
+{#- The hero animation, as delivered: a conveyor carries envelopes through a scanning gate, and
+    one is rejected. Inline SVG, animated by the fs-belt rules at the end of style.css; with
+    prefers-reduced-motion it is a still frame. Decorative, so hidden from assistive
+    technology, the block and the SVG alike. The clipPath id must stay unique on the page. #}
+<div class="hero-slot span-5" aria-hidden="true">
+<svg class="fs-belt" viewBox="0 0 560 220" preserveAspectRatio="xMidYMid meet" aria-hidden="true" focusable="false" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+<defs>
+<clipPath id="fs-belt-clip"><rect x="0" y="0" width="560" height="220"></rect></clipPath>
+</defs>
+<g clip-path="url(#fs-belt-clip)">
+
+{#- belt: runs past both edges #}
+<path d="M-10 150H570M-10 174H570" stroke="#4A4A4A"></path>
+<path d="M120 174v28M440 174v28M108 202h24M428 202h24" stroke="#3A3A3A"></path>
+
+{#- rollers: the short line makes the slow turn visible #}
+<g stroke="#3A3A3A">
+<g class="fs-belt-roller"><circle cx="24" cy="162" r="7"></circle><path d="M24 156v12"></path></g>
+<g class="fs-belt-roller"><circle cx="88" cy="162" r="7"></circle><path d="M88 156v12"></path></g>
+<g class="fs-belt-roller"><circle cx="152" cy="162" r="7"></circle><path d="M152 156v12"></path></g>
+<g class="fs-belt-roller"><circle cx="216" cy="162" r="7"></circle><path d="M216 156v12"></path></g>
+<g class="fs-belt-roller"><circle cx="280" cy="162" r="7"></circle><path d="M280 156v12"></path></g>
+<g class="fs-belt-roller"><circle cx="344" cy="162" r="7"></circle><path d="M344 156v12"></path></g>
+<g class="fs-belt-roller"><circle cx="408" cy="162" r="7"></circle><path d="M408 156v12"></path></g>
+<g class="fs-belt-roller"><circle cx="472" cy="162" r="7"></circle><path d="M472 156v12"></path></g>
+<g class="fs-belt-roller"><circle cx="536" cy="162" r="7"></circle><path d="M536 156v12"></path></g>
+</g>
+
+{#- envelopes: drawn at x 0–48 on the belt; CSS moves them #}
+<g stroke="#6B6B6B">
+<g class="fs-belt-env fs-belt-env--1"><rect x="0" y="118" width="48" height="32" rx="3"></rect><path d="M0 121l24 16 24-16"></path></g>
+<g class="fs-belt-env fs-belt-env--2"><rect x="0" y="118" width="48" height="32" rx="3"></rect><path d="M0 121l24 16 24-16"></path></g>
+<g class="fs-belt-env fs-belt-env--3"><rect x="0" y="118" width="48" height="32" rx="3"></rect><path d="M0 121l24 16 24-16"></path></g>
+<g class="fs-belt-env fs-belt-env--4"><rect x="0" y="118" width="48" height="32" rx="3"></rect><path d="M0 121l24 16 24-16"></path></g>
+<g class="fs-belt-reject"><rect x="0" y="118" width="48" height="32" rx="3"></rect><path d="M0 121l24 16 24-16"></path><path class="fs-belt-mark" d="M33 137l7 7M40 137l-7 7" stroke="#FF0022"></path></g>
+</g>
+
+{#- gate: arch, scan line, status lamp #}
+<path class="fs-belt-gate" d="M250 150V100a30 30 0 0 1 60 0v50M280 66v4"></path>
+<path class="fs-belt-scan" d="M280 78v68" stroke="#E5FF8F" stroke-dasharray="3 6"></path>
+<circle class="fs-belt-lamp" cx="280" cy="60" r="5"></circle>
+
+</g>
+</svg>
+</div>
 
 <section class="card span-5" aria-labelledby="facts-title">
 <h2 class="card__title" id="facts-title">How scans are handled</h2>

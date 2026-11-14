@@ -91,7 +91,6 @@ def test_every_page_template_documents_what_it_receives():
             "first_sighting",
             "severity_counts",
             "categories",
-            "points_total",
         },
         "history.html": {"scans", "senders"},
         "error.html": {"status", "title", "message"},

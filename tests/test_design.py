@@ -209,8 +209,37 @@ def test_the_navigation_marks_the_current_section_and_none_on_error_pages(
     assert marked == ([current] if current else [])
 
 
-def test_the_hero_slot_is_kept_empty_and_hidden_from_assistive_technology(every_page):
-    assert '<div class="hero-slot span-5" aria-hidden="true"></div>' in every_page["scan"]
+def test_the_hero_animation_is_hidden_from_assistive_technology(every_page):
+    page = every_page["scan"]
+
+    assert '<div class="hero-slot span-5" aria-hidden="true">' in page
+    assert '<svg class="fs-belt" viewBox="0 0 560 220"' in page
+    svg_tag = page[page.index('<svg class="fs-belt"') :].split(">", 1)[0]
+    assert 'aria-hidden="true"' in svg_tag
+    assert 'focusable="false"' in svg_tag
+
+
+def test_the_hero_clip_path_id_is_on_the_page_once(every_page):
+    page = every_page["scan"]
+
+    assert page.count('id="fs-belt-clip"') == 1
+    assert page.count('clip-path="url(#fs-belt-clip)"') == 1
+
+
+def test_the_hero_animation_has_a_still_frame_for_reduced_motion():
+    css = STYLESHEET.read_text(encoding="utf-8")
+    reduced = css[css.index("@media (prefers-reduced-motion: reduce)") :]
+
+    assert "animation: none;" in reduced.split("}")[0] + "}"
+    assert (
+        ".fs-belt path,\n.fs-belt rect,\n.fs-belt circle { vector-effect: non-scaling-stroke; }"
+        in css
+    )
+
+
+def test_the_static_hero_drawing_is_gone():
+    assert not (STATIC / "img" / "hero-conveyor.svg").exists()
+    assert "hero-conveyor" not in STYLESHEET.read_text(encoding="utf-8")
 
 
 def test_the_scan_page_has_the_file_form_and_the_paste_form(every_page):
@@ -268,14 +297,27 @@ def test_the_engines_categories_are_the_ones_the_page_knows():
     assert produced <= set(web.CATEGORIES)
 
 
-def test_the_result_page_shows_the_severity_summary_and_the_total_points(client):
+def test_the_result_page_shows_the_severity_summary(client):
     page = text(client.post("/scan", data=sample_upload("paypal-phish.eml")))
     result = analyze((SAMPLES / "paypal-phish.eml").read_bytes())
     counts = web._severity_counts(result.findings)
 
     expected = ", ".join(f"{count} {severity}" for severity, count in counts.items())
     assert f"{len(result.findings)} findings: {expected}</p>" in page
-    assert f"· {sum(result.category_scores.values())} points</p>" in page
+
+
+def test_the_findings_heading_gives_the_count_and_no_points_total(client):
+    # The categories' points are summed before the score's cap: "270 points" beside
+    # "100 / 100" would read as a fault. Each category keeps its own points.
+    page = text(client.post("/scan", data=sample_upload("paypal-phish.eml")))
+    result = analyze((SAMPLES / "paypal-phish.eml").read_bytes())
+
+    heading = page[
+        page.index('<div class="section-head">') : page.index('<div class="bento findings-grid">')
+    ]
+    assert f'<p class="muted">{len(result.findings)} findings</p>' in heading
+    assert "points" not in heading
+    assert page.count('<span class="points__unit">pts</span>') == len(web.CATEGORIES)
 
 
 @pytest.mark.parametrize(

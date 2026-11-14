@@ -19,7 +19,6 @@
     severity_counts: dict[str, int]    findings per severity, most severe first, none at zero
     categories: list[CategoryView]     every category in the engine's order, each with its
                                        findings (most severe first) and points
-    points_total: int      the points of all categories together
 -#}
 {% extends "base.html" %}
 
@@ -133,7 +132,9 @@
 
 <div class="section-head">
 <h2 class="section-head__title">Findings</h2>
-<p class="muted">{{ total }} {{ "finding" if total == 1 else "findings" }} · {{ points_total }} points</p>
+{#- No points total here: the categories' points are summed before the score's cap of 100, so
+    a total would read as a second, larger score. Each category block shows its own points. #}
+<p class="muted">{{ total }} {{ "finding" if total == 1 else "findings" }}</p>
 </div>
 
 {#- The stylesheet gives the category blocks their 7 and 5 column spans by position. #}
