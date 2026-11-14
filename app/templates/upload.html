@@ -121,7 +121,8 @@
 <form class="card span-12" action="{{ url_for('pages.scan') }}" method="post" enctype="multipart/form-data">
 <div class="card__head">
 <div>
-<h2 class="card__title"><label for="raw-email">or paste the raw email</label></h2>
+{#- The label inside the heading is what names the text area for assistive technology. #}
+<h2 class="card__title"><label for="raw-email">Paste the raw email</label></h2>
 <p class="card__sub">Headers and body, as plain text</p>
 </div>
 </div>

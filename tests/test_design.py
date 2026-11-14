@@ -250,6 +250,28 @@ def test_the_scan_page_has_the_file_form_and_the_paste_form(every_page):
     assert '<textarea class="textarea" id="raw-email" name="raw_email"' in page
 
 
+def test_the_paste_heading_stands_on_its_own_like_the_upload_heading(every_page):
+    page = every_page["scan"]
+
+    assert '<h2 class="card__title">Upload a file</h2>' in page
+    assert '<h2 class="card__title"><label for="raw-email">Paste the raw email</label></h2>' in page
+    assert "Headers and body, as plain text" in page
+    assert "or paste the raw email</label>" not in page
+
+
+def test_every_page_has_the_same_footer(every_page):
+    for page in every_page.values():
+        footer = page[page.index('<footer class="site-footer">') : page.index("</footer>")]
+        assert "<p>Hello team Upwind!</p>" in footer
+
+
+def test_the_privacy_facts_stay_on_the_scan_page(every_page):
+    page = every_page["scan"]
+
+    for fact in ("Analysed in memory", "Nothing stored but the verdict"):
+        assert fact in page
+
+
 # ------------------------------------------------------- Values worked out for the page
 
 
