@@ -135,11 +135,16 @@ class FakePipeline:
 
 @pytest.fixture
 def isolated_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
-    """Configuration from the defaults and the test's own settings only, and a fresh cache state."""
+    """Configuration from the defaults and the test's own settings only.
+
+    Also a fresh cache state, and a closed database circuit: both are kept per process, and
+    one test's failures must not carry over into the next.
+    """
     monkeypatch.setattr(config, "ENV_FILE", tmp_path / "absent.env")
     for name in CONFIG_VARIABLES:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(cache, "_connection", cache._Connection())
+    monkeypatch.setattr(db, "_circuit_opened_at", None)
     _forget_cached_configuration()
     yield
     _forget_cached_configuration()

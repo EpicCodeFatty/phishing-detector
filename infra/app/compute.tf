@@ -69,7 +69,11 @@ resource "aws_launch_template" "app" {
     }
   }
 
-  # The default for t3 is "unlimited", which silently bills for burst credits.
+  # "unlimited", for the boot. With "standard", a new t3 instance starts with no credits and
+  # runs at its baseline, 10% per vCPU, until it earns some, so the whole boot ran throttled:
+  # measured boots took 118, 203 and 298 seconds with "standard", and 76 seconds with
+  # "unlimited". Surplus is billed only for use above the instance's 24-hour average
+  # baseline, and the cpu-high alarm guards against a sustained surge.
   credit_specification {
     cpu_credits = "unlimited"
   }

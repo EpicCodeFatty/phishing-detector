@@ -2,8 +2,15 @@
 
 Every public function raises StorageError, and nothing else, when the database
 cannot be reached or refuses the work. The caller decides how to degrade.
+
+A circuit breaker stops this process calling a database that is known to be down, so its
+slowness cannot spread to everything else. Once a connection cannot be made, every call
+fails at once, without trying, for CIRCUIT_OPEN_SECONDS. After that one call is let
+through: if it connects, calls go through again; if not, the wait starts over.
 """
 
+import logging
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -15,8 +22,17 @@ from psycopg.types.json import Jsonb
 
 from app import config
 from app.detector.models import Finding
+from app.logging_setup import error_fields, log_event
 
-CONNECT_TIMEOUT_SECONDS = 5
+logger = logging.getLogger(__name__)
+
+# Each instance runs two gunicorn workers, each serving one request at a time. While the
+# database is unreachable, every request that needs it waits this long before failing; with
+# both workers waiting, the load balancer's health check queues behind them, times out, and
+# the instance is replaced for a fault that is not its own. Short, and the breaker below
+# means a process pays it once per CIRCUIT_OPEN_SECONDS rather than once per request.
+CONNECT_TIMEOUT_SECONDS = 3
+CIRCUIT_OPEN_SECONDS = 15
 DEFAULT_HISTORY_LIMIT = 50
 
 # A StorageError's message is what gets logged. The driver's text is kept, because it is
@@ -104,6 +120,11 @@ _REPLACEMENT_CHARACTER = "�"
 # Set once this process has made sure the table exists, so later calls skip it.
 _schema_ready = False
 
+# When this process last failed to connect, on the monotonic clock; None while connections
+# are being made. Per process: gunicorn's workers are separate processes, and each finds out
+# for itself, with one failed attempt, that the database is down.
+_circuit_opened_at: float | None = None
+
 
 class StorageError(Exception):
     """The scan history could not be read or written."""
@@ -176,16 +197,70 @@ def _connection() -> Iterator[psycopg.Connection]:
     """Yield a connection that commits when the block succeeds, and is always closed.
 
     Every database or configuration failure, here or in the block, becomes a StorageError.
+    Failing to connect opens the circuit; while it is open this raises at once, without
+    trying. A failure inside the block, once connected, leaves the circuit alone.
     """
+    _admit_through_circuit()
     try:
-        with _connect() as connection:
+        connection = _connect()
+    except (psycopg.Error, config.ConfigError) as error:
+        _open_circuit(error)
+        raise _storage_error(error) from error
+    _close_circuit()
+    try:
+        with connection:
             yield connection
     except (psycopg.Error, config.ConfigError) as error:
-        raise StorageError(f"{type(error).__name__}: {_brief(str(error))}") from error
+        raise _storage_error(error) from error
+
+
+def _admit_through_circuit() -> None:
+    """Raise StorageError while the circuit is open; once it has been open long enough, let one
+    attempt through.
+
+    The attempt re-arms the wait before it starts, so in a process serving several requests
+    at once the others are still refused while it runs.
+    """
+    global _circuit_opened_at
+    if _circuit_opened_at is None:
+        return
+    if time.monotonic() - _circuit_opened_at < CIRCUIT_OPEN_SECONDS:
+        raise StorageError(
+            f"CircuitOpen: a connection failed less than {CIRCUIT_OPEN_SECONDS} seconds ago; "
+            "not trying again yet"
+        )
+    _circuit_opened_at = time.monotonic()
+
+
+def _open_circuit(error: Exception) -> None:
+    """Start the wait. Log a warning when the circuit opens, not when a trial attempt fails."""
+    global _circuit_opened_at
+    was_closed = _circuit_opened_at is None
+    _circuit_opened_at = time.monotonic()
+    if was_closed:
+        log_event(
+            logger,
+            logging.WARNING,
+            "db_circuit_open",
+            open_seconds=CIRCUIT_OPEN_SECONDS,
+            **error_fields(_storage_error(error)),
+        )
+
+
+def _close_circuit() -> None:
+    global _circuit_opened_at
+    _circuit_opened_at = None
+
+
+def _storage_error(error: Exception) -> StorageError:
+    return StorageError(f"{type(error).__name__}: {_brief(str(error))}")
 
 
 def _connect() -> psycopg.Connection:
     """Open a connection, retrying once with a fresh password if the first attempt fails.
+
+    Only the outcome of both attempts counts for the circuit: a password that went stale
+    with a rotation is refreshed and retried, and does not open it.
 
     RDS rotates the password, and the cached one goes stale. psycopg reports a
     rejected password as a plain OperationalError with no SQLSTATE, so it cannot

@@ -162,9 +162,11 @@ locals {
       width  = 6
       height = 6
 
-      # On the dashboard on purpose. The launch template sets cpu_credits to "standard", so
-      # an instance that runs out of credits is throttled to its baseline rather than
-      # billed. A falling balance explains slowness that CPU alone does not.
+      # On the dashboard on purpose. The launch template sets cpu_credits to "unlimited", so
+      # an instance that runs out of credits is not throttled: it keeps bursting, and the
+      # surplus above its 24-hour average baseline is billed. A balance that stays at zero
+      # is what shows that surplus building up. It is also how the slow boots were found:
+      # with "standard", a new instance started at zero and booted at its baseline.
       properties = {
         title   = "CPU credit balance per instance"
         region  = var.region

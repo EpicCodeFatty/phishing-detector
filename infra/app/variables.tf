@@ -46,7 +46,10 @@ variable "health_check_grace_seconds" {
   type        = number
   description = "How long a new instance is protected from being replaced for failing the load balancer's health check. Keep it at least 60 seconds longer than a measured boot."
 
-  # A measured boot takes 118 seconds (cloud-init: "Up 118.51 seconds"); 118 + 60, rounded up.
+  # 300 after a replacement loop with 180: with cpu_credits "standard", boots took up to 298
+  # seconds, and instances were replaced before they finished booting. Kept this wide after
+  # the switch to "unlimited" brought a boot down to 76 seconds; to be lowered only after
+  # more boots have been measured.
   default = 300
 }
 
@@ -54,7 +57,8 @@ variable "instance_warmup_seconds" {
   type        = number
   description = "How long an instance refresh waits after launching a replacement before moving on to the next instance. Keep it at least 60 seconds longer than the grace period."
 
-  # The grace period plus 60.
+  # The grace period plus 60. 360 after the same replacement loop, when it was 240; kept wide
+  # with the grace period, and to be lowered with it, after more measurements.
   default = 360
 
   # Inside the grace period the group treats every instance as healthy. A refresh that moved

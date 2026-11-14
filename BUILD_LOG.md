@@ -290,6 +290,109 @@ adds about $1.10 a day for the gateway and about $0.12 for its address, while th
 every shared component what the survivors lose when its zone goes. The database is still in one
 zone, on purpose.
 
+### 2026-11-14 — First apply of bonus A timed out: instances replaced before they finished booting
+
+**Date.** 14 November 2026.
+
+**Phase.** Bonus A, HTTPS on the load balancer and a NAT gateway per availability zone.
+
+**Symptom.** The first apply timed out after 12 minutes with "want at least 2 healthy instance(s)
+registered to Load Balancer, have 1", and the Auto Scaling Group was tainted.
+
+**How it was found.** The group's Activity tab showed one instance terminated for "ELB system health
+check failure" about every four minutes: 12:05, 12:09, 12:13 and 12:17 UTC.
+
+**Cause.** The grace period was 180 s and boots were taking 203 to 298 s, so instances were replaced
+before they finished booting. Why the boots had become that slow is the next entry.
+
+**Fix.** Grace period 300 s, warm-up 360 s. The next apply replaced the tainted group and succeeded.
+(from the build session) They are the defaults of `health_check_grace_seconds` and
+`instance_warmup_seconds` in `infra/app/variables.tf`.
+
+**Lesson.** The Activity tab gives the reason for every termination. Terminations for "ELB system
+health check failure" at a regular interval mean instances are being replaced before their boot
+finishes: compare the grace period with the boot time.
+
+### 2026-11-14 — Root cause of the slow boots: `cpu_credits = "standard"`
+
+**Date.** 14 November 2026.
+
+**Phase.** Bonus A, HTTPS on the load balancer and a NAT gateway per availability zone.
+
+**Symptom.** Boots took 203 s and 298 s on 14 November, against 118 s measured on 13 November.
+
+**How it was found.** The boot log showed creating the virtualenv alone taking 30 s, and the
+dashboard's CPU credit balance for new instances started at 0.
+
+**Cause.** `cpu_credits = "standard"` on the launch template. A new t3 instance with standard
+credits starts with none, so it boots at its baseline, 10% per vCPU.
+
+**Fix.** `cpu_credits = "unlimited"`. The next measured boot took 76 s. (from the build session) The
+change is in `infra/app/compute.tf`, commit `425f3bb`. Surplus is billed only above the 24-hour
+average baseline, and the `cpu-high` alarm guards against a sustained surge.
+
+**Lesson.** Measured boots were 118 s, 203 s and 298 s with "standard" for the same code: one
+measurement was not enough to tune the timers against. The credit balance on the dashboard
+explained a slowness that the CPU graph alone did not.
+
+### 2026-11-14 — `terraform plan` failed: the login session had expired
+
+**Date.** 14 November 2026.
+
+**Phase.** Not recorded.
+
+**Symptom.** `terraform plan` failed with "No valid credential sources found ... login session has
+expired".
+
+**How it was found.** By the error.
+
+**Cause.** The temporary credentials from `aws login` had expired.
+
+**Fix.** Not recorded. (from the build session) The session is renewed with
+`aws login --profile phishing`, as in the environment setup above.
+
+**Lesson.** Run `aws sts get-caller-identity` at the start of every session.
+
+### 2026-11-14 — Bonus A applied and verified
+
+**Date.** 14 November 2026.
+
+**Phase.** Bonus A, HTTPS on the load balancer and a NAT gateway per availability zone.
+Verification, not an incident.
+
+**Symptom.** None. The self-signed certificate was imported into ACM, the HTTPS listener served the
+site with a 301 redirect from port 80, and there was one NAT gateway per zone, with two addresses in
+the outputs. 300 of 300 requests over HTTPS succeeded, split 150 and 150 between the two instances.
+
+**How it was found.** From the apply's outputs and the requests sent over HTTPS.
+
+**Cause.** Not applicable.
+
+**Fix.** Not applicable.
+
+**Lesson.** Not applicable.
+
+### 2026-11-14 — Bonus B applied: the result cache works, and saves little time
+
+**Date.** 14 November 2026.
+
+**Phase.** Bonus B, a result cache on ElastiCache (Valkey). Verification, not an incident.
+
+**Symptom.** None. The `infra/base` apply added 6 resources, changed 0 and destroyed 0; the cluster
+took about 10 minutes to create. A repeated scan showed "Served from cache" and "Seen 2 times", and
+the history showed the cache marker. `scripts/load.py` sent 300 requests: 300 succeeded, split 150
+and 150, with p50 420 ms, about the same as before the cache.
+
+**How it was found.** From the apply's output, the result and history pages, and `load.py`'s summary.
+
+**Cause.** Not applicable. The request time is dominated by the network, TLS and the database
+write, not by the engine, so skipping the engine changes little.
+
+**Fix.** Not applicable.
+
+**Lesson.** A cache saves only the work it skips. Here that is the engine, and the request time is
+dominated by everything else, so the speed gain is not where the cache earns its place.
+
 ---
 
 ## Template for new entries

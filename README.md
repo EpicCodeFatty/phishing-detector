@@ -398,9 +398,15 @@ still shows its result, with a notice that it was not saved, and the history pag
 503 that the 5XX alarm picks up.
 *Trade-off:* the health check reports less than the full truth. The database is monitored separately
 through its own CloudWatch metrics.
+A shallow health check is not enough on its own, so a circuit breaker in `app/db.py` backs it: once a
+connection to the database fails, each process stops trying for 15 seconds and every database call
+fails at once, so requests cannot pile up behind the 3-second connect timeout, occupy both gunicorn
+workers, and starve the load balancer's health check into replacing healthy instances. The production
+alternative is threaded or asynchronous workers, so that a slow dependency cannot starve the health
+check at all.
 
 **One database connection per request, no pool.**
-Each request opens a connection, with a 5-second connect timeout, and closes it when done. At the
+Each request opens a connection, with a 3-second connect timeout, and closes it when done. At the
 traffic of a demo a pool solves no problem, and pooled connections can go stale across an RDS failover.
 *Trade-off:* every database request pays for a new connection, a few milliseconds inside the VPC.
 `psycopg_pool` would be a two-line change if the load ever justified it.

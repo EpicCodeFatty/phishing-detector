@@ -1033,3 +1033,51 @@ def test_hostile_text_from_the_cache_is_still_escaped(valkey, client):
     assert FROM_CACHE in page
     assert not any(markup in page for markup in RAW_MARKUP)
     assert all(escaped in page for escaped in ESCAPED_MARKUP)
+
+
+# --------------------------------------------------------------- Database circuit breaker
+
+
+@pytest.fixture
+def database_down(isolated_config, monkeypatch) -> list[str]:
+    """A database that never answers. Returns the list of connection attempts made."""
+    attempts: list[str] = []
+
+    def time_out(password: str):
+        attempts.append("connect")
+        raise psycopg.errors.ConnectionTimeout("connection timeout expired")
+
+    monkeypatch.setenv("DB_PASSWORD", PASSWORD_MARKER)
+    monkeypatch.setattr(db, "_open", time_out)
+    return attempts
+
+
+def test_with_the_database_down_only_the_first_request_tries_to_connect(database_down, caplog):
+    test_client = _client()  # startup tries once, fails, and opens the circuit
+
+    scans = [test_client.post("/scan", data=sample_upload("paypal-phish.eml")) for _ in range(3)]
+    histories = [test_client.get("/history") for _ in range(2)]
+
+    assert [response.status_code for response in scans] == [200] * 3
+    assert all(SAVE_WARNING in response.get_data(as_text=True) for response in scans)
+    assert [response.status_code for response in histories] == [503] * 2
+    assert database_down == ["connect"]
+    warnings = [record for record in caplog.records if record.getMessage() == "db_circuit_open"]
+    assert len(warnings) == 1
+
+
+def test_health_answers_throughout_a_database_outage(database_down, monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(db.time, "monotonic", lambda: now[0])
+    test_client = _client()
+
+    answers = []
+    for _ in range(3):
+        test_client.post("/scan", data=sample_upload("team-lunch.eml"))
+        answers.append(test_client.get("/health").status_code)
+        now[0] += db.CIRCUIT_OPEN_SECONDS  # each scan's attempt after the wait fails again
+
+    assert answers == [200, 200, 200]
+    # Startup; the first scan falls inside the first wait and makes none; then one attempt
+    # each time a wait has passed.
+    assert len(database_down) == 3
