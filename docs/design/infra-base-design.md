@@ -7,7 +7,7 @@ become available and nobody should watch that during a demo.
 `infra/app` — the load balancer, the instances, the monitoring — is a separate stack applied live, and
 it reads this stack's outputs.
 
-Read `docs/code-standards.md` for naming and comment conventions; they apply to HCL as well.
+Read `docs/design/code-standards.md` for naming and comment conventions; they apply to HCL as well.
 
 ---
 

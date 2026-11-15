@@ -8,7 +8,7 @@ The goal is not a scanner report with zero findings. It is **zero unexplained fi
 scanner flags is either fixed or accepted on purpose, with the reason next to the code and in the
 README.
 
-Read `docs/code-standards.md` and the phase 4–6 design documents first.
+Read `docs/design/code-standards.md` and the phase 4–6 design documents first.
 
 **Do not run `terraform plan` or `apply`.** Scanners read files only. Stop after the fixes, the
 scans and the write-up.
@@ -153,7 +153,7 @@ An `after_request` hook that sets, if not already set:
   loosening the policy. Report what had to move.
 - **This policy is now a rule for any later redesign of the interface.** Fonts, scripts and styles
   must be files under `static/`; nothing loaded from a CDN, no inline `<script>`, no `style=""`.
-  Add that sentence to the template contract in `docs/webapp-design.md`, so a redesign does not
+  Add that sentence to the template contract in `docs/design/webapp-design.md`, so a redesign does not
   silently produce a page the browser refuses to style.
 - **What it is:** a content security policy is a list the server sends telling the browser which
   sources it may load from. If an attacker does manage to inject markup, the browser refuses to run

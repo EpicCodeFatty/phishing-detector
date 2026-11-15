@@ -20,14 +20,14 @@ Also used: Terraform 1.17.1, Python 3.12.10.
 
 **Updated on 14 November 2026**, on the branch `feature/https-nat`: the load balancer got an
 HTTPS listener with a self-signed certificate, port 80 became a redirect, and each availability
-zone got its own NAT gateway (`docs/bonus-https-nat-design.md`). checkov and bandit were run
+zone got its own NAT gateway (`docs/design/bonus-https-nat-design.md`). checkov and bandit were run
 again with the same versions and commands; the checkov figures below are from that run. pip-audit
 and gitleaks were not run again, and their figures are from 13 November.
 
 **Updated again on 14 November 2026**, on the branch `feature/cache`: a result cache on
 ElastiCache (Valkey 8.2) in `infra/base`, with its AUTH token in Secrets Manager, the rules and a
 third inline policy in `infra/app`, and the `redis` client library in the application
-(`docs/bonus-cache-design.md`). checkov, bandit and pip-audit were run again with the same versions
+(`docs/design/bonus-cache-design.md`). checkov, bandit and pip-audit were run again with the same versions
 and commands; the figures below are from that run. gitleaks was not run again.
 
 - **gitleaks** was installed with `winget install Gitleaks.Gitleaks`. winget checks the download
@@ -66,7 +66,7 @@ pip-audit finds no known vulnerability in the 29 pins, `redis==8.1.0` among them
 Both bandit findings are false positives (section 5), each marked `# nosec B105` on its line with
 the reason. After that, bandit reports no issues and exits with code 0.
 
-**IAM Access Analyzer** (`docs/hardening-phase7-design.md`, section 5) was not run here; the owner
+**IAM Access Analyzer** (`docs/design/hardening-phase7-design.md`, section 5) was not run here; the owner
 runs it against the live account:
 
 - `read-release`: *result to be recorded*

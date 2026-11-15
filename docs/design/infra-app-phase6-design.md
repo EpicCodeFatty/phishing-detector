@@ -13,7 +13,7 @@ This phase answers all five from **one CloudWatch dashboard**, sends **email ale
 something breaks, and ships the application log to **CloudWatch Logs**, where it can be searched with
 Logs Insights. Everything is managed AWS features; nothing is self-hosted.
 
-Read `docs/code-standards.md`, `docs/infra-app-design.md` and `docs/infra-app-phase5-design.md` first.
+Read `docs/design/code-standards.md`, `docs/design/infra-app-design.md` and `docs/design/infra-app-phase5-design.md` first.
 Everything there still applies.
 
 **Do not run `terraform init`, `plan` or `apply`.** Write the code, run `terraform fmt` and the test

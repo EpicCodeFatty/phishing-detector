@@ -5,7 +5,7 @@ runs on port 8000 with the real Flask application, connects it to RDS, and makes
 `terraform apply`: a code change goes up as a new release, and the Auto Scaling Group replaces the
 instances one at a time with no downtime.
 
-Read `docs/code-standards.md`, `docs/infra-app-design.md` and `docs/webapp-design.md` first. Everything
+Read `docs/design/code-standards.md`, `docs/design/infra-app-design.md` and `docs/design/webapp-design.md` first. Everything
 in `infra-app-design.md` still applies unless this document says otherwise.
 
 **Do not run `terraform apply`.** Write the code, run `terraform fmt`, `terraform validate` and the test

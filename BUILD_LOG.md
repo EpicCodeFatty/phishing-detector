@@ -143,7 +143,7 @@ a client certificate therefore got EACCES instead of ENOENT, and aborted the con
 
 **Fix.** `ProtectHome=tmpfs`, deployed through Terraform and a rolling instance refresh.
 (from the build session) The unit in `deploy/user_data.sh.tftpl` has `ProtectHome=tmpfs`;
-`docs/infra-app-phase5-design.md` still shows `ProtectHome=true`.
+`docs/design/infra-app-phase5-design.md` still shows `ProtectHome=true`.
 
 **Lesson.** A hardening option can turn "file not found" into "permission denied", and software
 that shrugs at the first may stop at the second. The application's own error log named the cause

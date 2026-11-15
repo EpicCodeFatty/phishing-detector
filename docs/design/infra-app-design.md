@@ -8,7 +8,7 @@ This document covers **phase 4 only**: standing the infrastructure up with a pla
 that answers "hello" and nothing more. The real application, the S3 artifact and the monitoring come in
 phases 5 and 6, into the same stack.
 
-Read `docs/code-standards.md` and `docs/infra-base-design.md` first.
+Read `docs/design/code-standards.md` and `docs/design/infra-base-design.md` first.
 
 ---
 
@@ -97,7 +97,7 @@ resource "aws_route" "private_app_nat" {
 **The NAT goes in a public subnet, not a private one.** This catches people out: the gateway that gives
 private instances a way out must itself sit where there is a route to the internet gateway.
 
-> **Superseded.** Since `docs/bonus-https-nat-design.md` there is one NAT gateway per availability
+> **Superseded.** Since `docs/design/bonus-https-nat-design.md` there is one NAT gateway per availability
 > zone, and each route table points at the gateway of its own zone. The paragraph below describes
 > the stack as phase 4 built it.
 
@@ -557,7 +557,7 @@ Outputs: `alb_dns_name`, `alb_url` (with `http://` in front), `asg_name`, `targe
 for phase 5; the NAT address is the address the instances appear from, which is useful when reading
 third-party logs.
 
-> **Superseded.** Since `docs/bonus-https-nat-design.md`, `alb_url` starts with `https://`,
+> **Superseded.** Since `docs/design/bonus-https-nat-design.md`, `alb_url` starts with `https://`,
 > `alb_http_url` is the `http://` address, and `nat_public_ip` is `nat_public_ips`, a map from zone
 > to address.
 
@@ -607,7 +607,7 @@ curl.exe -sk "$url/health"
 ```
 
 On Windows write `curl.exe`. Plain `curl` in PowerShell is an alias for a different command.
-`-k` accepts the load balancer's self-signed certificate (`docs/bonus-https-nat-design.md`).
+`-k` accepts the load balancer's self-signed certificate (`docs/design/bonus-https-nat-design.md`).
 
 **A 503 for the first minute or two is normal.** It means the load balancer is up and has no healthy
 targets yet. Watch EC2 → Target Groups until both read `healthy`.

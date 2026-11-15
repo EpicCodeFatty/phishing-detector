@@ -12,7 +12,7 @@ branch and is explained in the review instead.
 
 **Do not run `terraform init`, `plan` or `apply`.**
 
-Read `docs/code-standards.md`, `docs/webapp-design.md`, `docs/infra-base-design.md` and the phase 5–7
+Read `docs/design/code-standards.md`, `docs/design/webapp-design.md`, `docs/design/infra-base-design.md` and the phase 5–7
 design documents first.
 
 ---
@@ -295,7 +295,7 @@ do, and the initialisation runs in every worker at every start.
 - Result page: when the count is 2 or more, "Seen N times in the last 24 hours". Not shown on the
   scan detail page opened from history, where the count is not known.
 - History: a small marker on cached rows. Keep the table readable.
-- Update the template contract in `docs/webapp-design.md`.
+- Update the template contract in `docs/design/webapp-design.md`.
 
 ### Local container
 

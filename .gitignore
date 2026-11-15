@@ -1,6 +1,6 @@
 # Python
 .venv/
-# checkov's own environment, kept apart from the project's (docs/hardening-phase7-design.md)
+# checkov's own environment, kept apart from the project's (docs/design/hardening-phase7-design.md)
 .venv-scan/
 __pycache__/
 *.pyc

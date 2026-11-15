@@ -6,7 +6,7 @@ interface and a JSON API, backed by PostgreSQL for scan history.
 This document covers phase 2 — everything runs locally against a PostgreSQL container. The same code
 runs unchanged on EC2 against RDS; the only difference is where the configuration comes from.
 
-Read `docs/code-standards.md` first. It applies here as it does to the engine.
+Read `docs/design/code-standards.md` first. It applies here as it does to the engine.
 
 ---
 
@@ -74,7 +74,7 @@ One module reads everything from environment variables. No module anywhere else 
 | `CACHE_TTL_SECONDS` | `86400` | `86400` |
 | `CACHE_TLS` | `false` for the local container | `true` (the default) |
 
-The cache settings come from `docs/bonus-cache-design.md`. The cache is off unless `CACHE_HOST` is
+The cache settings come from `docs/design/bonus-cache-design.md`. The cache is off unless `CACHE_HOST` is
 set. Its token is fetched like the database password, but lazily, on the first scan that uses the
 cache, and with tighter limits; it is not rotated, so it is never re-read.
 
@@ -199,7 +199,7 @@ introduces connections that can go stale across an RDS failover. The trade-off i
 and `psycopg_pool` is a two-line change if load ever justified it.
 
 Set a short connect timeout (`connect_timeout=3`). The default waits long enough that a database
-problem looks like a hung page. A circuit breaker backs it (`docs/drills-phase8-design.md`,
+problem looks like a hung page. A circuit breaker backs it (`docs/design/drills-phase8-design.md`,
 section 2): after a failed connection each process refuses database calls at once for 15 seconds,
 then lets one attempt through, so a database that is down cannot tie up both workers.
 
