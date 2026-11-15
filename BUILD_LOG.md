@@ -33,7 +33,7 @@ No access keys are needed anywhere in this project.
 **Budget.** A monthly cost budget with email alerts was created by hand in the console rather than in
 Terraform, so that it keeps working after `terraform destroy`.
 
-**Repository.** Private repository, folder skeleton, and a `.gitignore` covering `.venv/`, `.env`,
+**Repository.** A GitHub repository (private while the project was built), folder skeleton, and a `.gitignore` covering `.venv/`, `.env`,
 `.terraform/`, `*.tfstate*` and `*.tfvars`. `.terraform.lock.hcl` is intentionally *not* ignored, so
 the provider version stays pinned across machines.
 
