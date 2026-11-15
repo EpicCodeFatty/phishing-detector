@@ -47,5 +47,9 @@ Drill 14 - broken release (15 Nov): deployed release 19236e29cae8 (drill branch,
   i-0390cd098a8312c14 at 00:38:47, i-0d1a0c4915ec681ee at 00:44:53 (~6 min cycle).
 - The refresh never touched the second instance (i-0677fa06e36629c91, release c8a378517277); /health loop stayed 200 throughout.
 - Recovery: cancel-instance-refresh (refresh Cancelled at 00:48:48, "Cancelled due to user request"), git switch main,
-  terraform apply (release back to c8a378517277, identical source hash); new refresh started 00:52:18, Successful.
+   terraform apply (release back to c8a378517277, identical source hash); new refresh started 00:52:18, Successful at 01:09:19 (~17 min for both instances).
 - Production would add: automatic rollback on a dedicated alarm (not unhealthy-targets, which fires on every normal refresh).
+
+Teardown of infra/app (15 Nov ~01:15): terraform destroy -> 57 resources destroyed. Verified empty: terraform state list,
+Auto Scaling groups, EC2 instances (pending/running/stopping/stopped), load balancers, NAT gateways (pending/available),
+Elastic IPs, log groups with prefix /phishing-detector. infra/base (VPC, RDS, Valkey, SNS) is kept until the demo.
