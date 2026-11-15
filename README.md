@@ -1,3 +1,5 @@
+<img src="docs/img/fishscan-banner.png" alt="Fish Scan: phishing email detector on AWS, by Denis Smokota" width="100%">
+
 # Fish Scan: a phishing email detector on AWS
 
 Fish Scan is a Python service that analyzes an email file, scores it for phishing indicators, and
@@ -181,6 +183,10 @@ The database's and the cache's groups belong to `infra/base`, which creates them
 inbound rule each is created by `infra/app` (`security.tf`), and goes when that stack is destroyed.
 
 ## 3. The detection engine
+
+![How Fish Scan reads an email](docs/img/fishscan-detection-flow.png)
+
+The same flow, step by step, is described below.
 
 The engine is in `app/detector/`. Its entry point, `analyze()` in `engine.py`, is a pure function
 of the email's bytes: no network calls, no configuration, no state. The same bytes always give the
