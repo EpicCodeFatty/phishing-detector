@@ -1,0 +1,51 @@
+Load test, 14 Nov ~21:44-21:45: 600 requests, all 200, split 300/300 across the two instances; client-side p50 423 ms, p95 591 ms (includes internet round trip and TLS from Israel).
+Errors, 14 Nov 21:46: 10 requests to /simulate-error, all 500.
+
+Dashboard rows 1-2 (06a), 14 Nov 21:58: 2 healthy targets, 0 unhealthy for the full hour; CPU near 0% under ~5 req/s; memory ~40%; root disk ~30%; CPU credit balance rising.
+
+Dashboard rows 3-4 (06b): load spike ~300 req/min at 21:44, ~150 per target (even split across both instances).
+Status: 2xx up to 300/min; 10 app 5XX at 21:46 (/simulate-error); zero 5XX from the load balancer itself.
+Server response time p50 ~40 ms, p95 up to ~88 ms at peak (vs 423 ms p50 at the client: the difference is network and TLS).
+
+Alarms (07a, 07b, 08): 5 alarms, all with actions enabled.
+target-5xx threshold: >= 5 app 5XX in 1 minute.
+10 /simulate-error requests at 21:46 -> ALARM at 21:49:02 (~3 min detection), SNS email sent;
+back to OK at 21:55:02 with a second email (ok_actions).
+
+Cache (09, Logs Insights cache-hit-ratio, last 3h):
+610 scans with a cache field: 589 hit / 21 miss = 96.6% hit ratio (the load test repeats a small set of sample emails).
+analysis_ms avg: miss 18.6 ms vs hit 1.8 ms (~10x).
+Server duration avg: miss 74.6 ms vs hit 36.1 ms;
+the miss average also includes first-request warm-up (new DB/cache connections), so the clean comparison is analysis_ms.
+
+VPC flow log rejects (10, last 3h): 6,868 rejected records, steady background of internet scanning against the public ALB/NAT addresses:
+Telnet 23, SSH 22, RDP 3389, WinRM 5985, proxies 8080/3128, DVR 34567, Ollama 11434, ICMP.
+None reached an instance. Top 4 sources are our own instances (10.0.x.x) sending NTP (UDP 123) to public time servers,
+blocked by egress rules; time still syncs via Amazon Time Sync 169.254.169.123 (verified with chronyc in drill 11:
+169.254.169.123 selected, reach 377, offset ~10 us; the public servers show reach 0).
+
+Drill 11 - self-heal (14 Nov): stopped phishing-app on i-0c9cd0a423df923f0 (1a) at 23:07:53.
+- ALB: 3 x 502 between 23:07:57 and 23:08:04 (client loop every 2 s), then all 200 via the healthy instance in 1b (~10 s of partial errors).
+- Target marked unhealthy ~23:08; unhealthy-targets went to ALARM at ~23:10 (2 datapoints of UnHealthyHostCount = 1), email sent.
+- ASG: terminated the instance at 23:09:16, cause "ELB system health check failure" (~80 s after the failure);
+  launched i-09eed5b66ad2f9dd5 at 23:09:18; alarm back to OK a few minutes later.
+- Result: no manual action, user impact ~10 s on part of the requests, back to 2/2 healthy.
+- Finding: the ASG replaced the instance before anyone would have looked; nothing alerts on an ASG replacement by itself.
+
+Drill 12-13 - DB unreachable and drift (15 Nov): deleted the db-sg inbound 5432 rule (from app-sg) in the console at ~00:00.
+- Scans still returned a verdict, with "could not be saved"; History returned 503.
+- /health loop stayed 200; both targets stayed Healthy and the ASG replaced nothing (shallow /health is intentional:
+  a DB outage must not make the ASG kill healthy app servers).
+- Logs: DB connection errors and one circuit-breaker warning; after the first ~3 s connect timeout, requests failed fast.
+- terraform plan detected the drift ("AWS resource not found during refresh", 1 to add, 0 to change, 0 to destroy);
+  terraform apply restored the rule at ~00:12; saving and History worked again within ~15 s (circuit breaker window).
+
+Drill 14 - broken release (15 Nov): deployed release 19236e29cae8 (drill branch, app/drill_broken.py with a syntax error) at ~00:33.
+- Rolling refresh took out one instance and launched a new one; the new instance failed at compileall
+  (SyntaxError in drill_broken.py in the boot log, e.g. i-0d1a0c4915ec681ee at 00:39:56, ~63 s after boot); the service never started.
+- After the 300 s grace period the ASG replaced it for "ELB system health check failure":
+  i-0390cd098a8312c14 at 00:38:47, i-0d1a0c4915ec681ee at 00:44:53 (~6 min cycle).
+- The refresh never touched the second instance (i-0677fa06e36629c91, release c8a378517277); /health loop stayed 200 throughout.
+- Recovery: cancel-instance-refresh (refresh Cancelled at 00:48:48, "Cancelled due to user request"), git switch main,
+  terraform apply (release back to c8a378517277, identical source hash); new refresh started 00:52:18, Successful.
+- Production would add: automatic rollback on a dedicated alarm (not unhealthy-targets, which fires on every normal refresh).
