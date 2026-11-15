@@ -84,11 +84,22 @@ available as JSON on `/api/scan`, and from the command line with `detect.py`.
 The application stack is not left running. `infra/app` is destroyed at the end of each working
 session, and the demo brings it up again with Terraform (section 4).
 
-![A phishing sample's result: the verdict, the score and the findings](docs/screenshots/02-result-phishing.png)
+### What it looks like
 
-Also: [the Scan page](docs/screenshots/01-scan-page.png),
-[a result served from the cache](docs/screenshots/03-result-cached.png),
-[the History page](docs/screenshots/04-history.png).
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/01-scan-page.png" width="100%" alt="The Scan page"><br>The Scan page: upload an <code>.eml</code> or <code>.txt</code> file, or paste the raw email.</td>
+<td width="50%"><img src="docs/screenshots/02-result-phishing.png" width="100%" alt="A Phishing result"><br>A result: Phishing, score 60, decided by one critical finding, with the instance that served it.</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/03-result-cached.png" width="100%" alt="A result served from the cache"><br>The same email scanned again: served from the cache, the result reused.</td>
+<td width="50%"><img src="docs/screenshots/04-history.png" width="100%" alt="The History page"><br>History: recent scans with sender, verdict, score, serving instance and the cache marker.</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/05-load-test.png" width="100%" alt="The load test output"><br>The load test: 600 requests, all 200, split 300 and 300; then 10 deliberate 500s.</td>
+<td width="50%"></td>
+</tr>
+</table>
 
 The product is called Fish Scan; the repository and every technical identifier keep the original
 name, `phishing-detector`: the Terraform resources, the log groups, the dashboard and the `Project`
