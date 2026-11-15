@@ -66,13 +66,10 @@ pip-audit finds no known vulnerability in the 29 pins, `redis==8.1.0` among them
 Both bandit findings are false positives (section 5), each marked `# nosec B105` on its line with
 the reason. After that, bandit reports no issues and exits with code 0.
 
-**IAM Access Analyzer** (`docs/design/hardening-phase7-design.md`, section 5) was not run here; the owner
-runs it against the live account:
-
-- `read-release`: *result to be recorded*
-- `read-db-secret`: *result to be recorded*
-- `read-cache-secret`: *result to be recorded*
-- `deliver-flow-logs` (on role `phishing-detector-flow-logs`): *result to be recorded*
+**IAM Access Analyzer** (`docs/design/hardening-phase7-design.md`, section 5) was not run before
+the deadline. The application stack, which holds the four inline policies (`read-release`,
+`read-db-secret`, `read-cache-secret`, `deliver-flow-logs`), is torn down, so the check is listed as
+a next step in the README.
 
 ## 3. Fixed
 
