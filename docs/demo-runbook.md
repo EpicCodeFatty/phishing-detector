@@ -173,4 +173,4 @@ From [`screenshots/notes.txt`](screenshots/notes.txt) and `BUILD_LOG.md`. Times 
    aws resourcegroupstaggingapi get-resources --profile phishing --tag-filters Key=Project,Values=phishing-detector --query "ResourceTagMappingList[].ResourceARN"
    ```
 
-3. **Record the result** at the `CLEANUP RESULT` marker in README section 8.
+3. **Record the result** under *Teardown result* in README section 8.

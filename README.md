@@ -621,7 +621,7 @@ service never started. After the 300-second grace period the group replaced each
 (`i-0677fa06e36629c91`, release `c8a378517277`), and the health loop stayed at 200 throughout. The
 refresh was cancelled at 00:48:48 ("Cancelled due to user request"); `git switch main` and
 `terraform apply` put back release `c8a378517277` (an identical source hash), and the new refresh,
-started at 00:52:18, ended Successful. Screenshots:
+started at 00:52:18, was Successful at 01:09:19. Screenshots:
 [14a2](docs/screenshots/14a2-health-old-release.png),
 [14b](docs/screenshots/14b-refresh-inprogress-done.png),
 [14c](docs/screenshots/14c-boot-log-syntax-error.png),
@@ -977,7 +977,11 @@ aws secretsmanager list-secrets --profile phishing --include-planned-deletion --
 After `infra/app` alone, `Key=Stack,Values=app` in place of the `Project` filter checks that stack's
 part only.
 
-<!-- CLEANUP RESULT: filled after the teardown -->
+**Teardown result (15 November).** `terraform destroy` in `infra/app` removed 57 resources at
+about 01:15 UTC. Every verification check returned an empty list: the Terraform state, Auto Scaling
+groups, EC2 instances, load balancers, NAT gateways, Elastic IPs and the `/phishing-detector` log
+groups. `infra/base` stays up until the demo. Screenshot:
+[15](docs/screenshots/15-destroy-verified.png).
 
 ---
 
